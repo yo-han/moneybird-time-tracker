@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Moneybird Timer Settings</title>
+    <script src="https://sdpi-components.dev/releases/v3/sdpi-components.js"></script>
+    <style>
+        .error {
+            color: #ff0000;
+            font-size: 12px;
+            margin-top: 4px;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+     <sdpi-item label="Display title">
+        <sdpi-textfield id="displayTitle" setting="displayTitle" placeholder="Title of the key"></sdpi-textfield>
+    </sdpi-item>
+
+    <sdpi-item label="API Key">
+        <sdpi-textfield id="apiKey" setting="apiKey" type="password"></sdpi-textfield>
+        <div id="apiKeyError" class="error hidden"></div>
+    </sdpi-item>
+
+    <sdpi-item label="Administration">
+        <sdpi-select id="administrationId" setting="administrationId">
+            <option value="">Select an administration</option>
+        </sdpi-select>
+        <div id="administrationError" class="error hidden"></div>
+    </sdpi-item>
+
+    <sdpi-item label="Project">
+        <sdpi-select id="projectId" setting="projectId">
+            <option value="">Select a project</option>
+        </sdpi-select>
+        <div id="projectError" class="error hidden"></div>
+    </sdpi-item>
+
+    <sdpi-item label="User">
+        <sdpi-select id="userId" setting="userId">
+            <option value="">Select a user</option>
+        </sdpi-select>
+        <div id="userError" class="error hidden"></div>
+    </sdpi-item>
+
+    <sdpi-item label="Description">
+        <sdpi-textfield id="description" setting="description" placeholder="Optional description"></sdpi-textfield>
+    </sdpi-item>
+
+    <sdpi-item label="Billable">
+        <sdpi-checkbox id="billable" setting="billable"></sdpi-checkbox>
+    </sdpi-item>
+
+    <script>
+    (function() {
+        'use strict';
+        
+        const { streamDeckClient } = SDPIComponents;
+        let isConnected = false;
+        let currentSettings = {};
+        
+        const PERSIST_KEY = 'moneybird_timer_last_settings';
+
+        function isLocalStorageAvailable() {
+            try {
+                const test = '__storage_test__';
+                localStorage.setItem(test, test);
+                localStorage.removeItem(test);
+                return true;
+            } catch(e) {
+                return false;
+            }
+        }
+
+        function loadPersistedSettings() {
+            if (!isLocalStorageAvailable()) {
+                return {};
+            }
+
+            try {
+                const persistedSettings = localStorage.getItem(PERSIST_KEY);
+                return persistedSettings ? JSON.parse(persistedSettings) : {};
+            } catch (error) {
+                return {};
+            }
+        }
+
+        function savePersistedSettings(settings) {
+            if (!isLocalStorageAvailable()) {
+                return;
+            }
+
+            try {
+                const existingSettings = loadPersistedSettings();
+                const settingsToSave = {
+                    ...existingSettings,
+                    displayTitle: settings.displayTitle || existingSettings.displayTitle,
+                    administrationId: settings.administrationId || existingSettings.administrationId,
+                    projectId: settings.projectId || existingSettings.projectId,
+                    userId: settings.userId || existingSettings.userId,
+                    description: settings.description || existingSettings.description,
+                    billable: settings.billable === true || settings.billable === 'true'
+                };
+
+                localStorage.setItem(PERSIST_KEY, JSON.stringify(settingsToSave));
+            } catch (error) {
+                // Silently fail
+            }
+        }
+
+        function showError(elementId, message) {
+            const errorDiv = document.getElementById(`${elementId}Error`);
+            if (errorDiv) {
+                errorDiv.textContent = message;
+                errorDiv.classList.remove('hidden');
+            }
+        }
+
+        function hideError(elementId) {
+            const errorDiv = document.getElementById(`${elementId}Error`);
+            if (errorDiv) {
+                errorDiv.classList.add('hidden');
+            }
+        }
+
+        function updateFormFields(settings = {}) {
+            try {
+                const relevantKeys = ['apiKey', 'displayTitle', 'administrationId', 'projectId', 'userId', 'description', 'billable'];
+                
+                relevantKeys.forEach(key => {
+                    const value = settings[key];
+                    if (value !== undefined) {
+                        try {
+                            const element = document.getElementById(key);
+                            if (element) {
+                                if (element.tagName === 'SDPI-CHECKBOX') {
+                                    element.value = value === true || value === 'true' ? 'true' : 'false';
+                                } else {
+                                    element.value = value?.toString() || '';
+                                }
+                                hideError(key);
+                            }
+                        } catch (fieldError) {
+                            showError(key, 'Error updating field');
+                        }
+                    }
+                });
+            } catch (error) {
+                // Silently fail
+            }
+        }
+
+        function updateDropdown(elementId, items = [], valueKey = 'id', nameKey = 'name', defaultText = 'Select an option') {
+            try {
+                const select = document.getElementById(elementId);
+                if (!select) return;
+
+                const options = [{ value: '', text: defaultText }];
+                items.forEach(item => {
+                    if (item?.[valueKey] && item?.[nameKey]) {
+                        options.push({
+                            value: item[valueKey],
+                            text: item[nameKey]
+                        });
+                    }
+                });
+
+                const optionsHtml = options.map(opt => 
+                    `<option value="${opt.value}">${opt.text}</option>`
+                ).join('');
+
+                select.innerHTML = optionsHtml;
+
+                if (currentSettings[select.getAttribute('setting')]) {
+                    select.value = currentSettings[select.getAttribute('setting')];
+                }
+
+                hideError(elementId);
+            } catch (error) {
+                showError(elementId, `Error loading ${elementId}`);
+            }
+        }
+
+        async function loadResources() {
+            try {
+                const apiKey = document.getElementById('apiKey')?.value;
+                const administrationId = document.getElementById('administrationId')?.value;
+
+                if (!apiKey) return;
+
+                hideError('apiKey');
+                hideError('administrationId');
+
+                const payload = { 
+                    event: 'setGlobalSettings', 
+                    apiKey 
+                };
+
+                if (administrationId) {
+                    payload.administrationId = administrationId;
+                }
+
+                await streamDeckClient.send('sendToPlugin', payload);
+            } catch (error) {
+                showError('apiKey', 'Error loading resources');
+            }
+        }
+
+        async function saveSettings() {
+            try {
+                if (!isConnected) return;
+
+                const settings = {};
+                const elements = document.querySelectorAll('[setting]');
+                
+                elements.forEach(element => {
+                    const settingName = element.getAttribute('setting');
+                    if (settingName) {
+                        let value;
+                        if (element.tagName === 'SDPI-CHECKBOX') {
+                            value = element.value === 'true';
+                        } else {
+                            value = element.value || currentSettings[settingName];
+                        }
+                    
+                        settings[settingName] = value;
+                    }
+                });
+
+                await streamDeckClient.setSettings(settings);
+                savePersistedSettings(settings);
+                currentSettings = {...currentSettings, ...settings};
+            } catch (error) {
+                // Silently fail
+            }
+        }
+
+        function initializeEventListeners() {
+            try {
+                const settingElements = document.querySelectorAll('[setting]');
+                settingElements.forEach(element => {
+                    element.addEventListener('input', saveSettings);
+                    element.addEventListener('change', saveSettings);
+                });
+
+                const apiKeyElement = document.getElementById('apiKey');
+                const adminElement = document.getElementById('administrationId');
+
+                if (apiKeyElement) apiKeyElement.addEventListener('change', loadResources);
+                if (adminElement) adminElement.addEventListener('change', loadResources);
+            } catch (error) {
+                // Silently fail
+            }
+        }
+
+        streamDeckClient.didReceiveSettings.subscribe(event => {
+            try {
+                const settings = event?.payload?.settings || {};
+                
+                const persistedSettings = loadPersistedSettings();
+                const mergedSettings = {...settings, ...persistedSettings};
+                
+                currentSettings = mergedSettings;
+                
+                updateFormFields(mergedSettings);
+                
+                if (Array.isArray(settings.administrations)) {
+                    updateDropdown('administrationId', settings.administrations);
+                }
+
+                if (Array.isArray(settings.projects)) {
+                    updateDropdown('projectId', settings.projects);
+                }
+
+                if (Array.isArray(settings.users)) {
+                    updateDropdown('userId', settings.users);
+                }
+            } catch (error) {
+                // Silently fail
+            }
+        });
+
+        window.connectElgatoStreamDeckSocket = async function(port, uuid, event, info, actionInfo) {
+            try {
+                await streamDeckClient.connect(port, uuid, event, JSON.parse(info), JSON.parse(actionInfo));
+                
+                isConnected = true;
+                
+                const persistedSettings = loadPersistedSettings();
+                
+                if (Object.keys(persistedSettings).length > 0) {
+                    updateFormFields(persistedSettings);
+                }
+                
+                initializeEventListeners();
+                
+                const apiKey = document.getElementById('apiKey')?.value;
+                
+                if (apiKey) {
+                    await loadResources();
+                }
+            } catch (error) {
+                // Silently fail
+            }
+        };
+    })();
+    </script>
+</body>
+</html>

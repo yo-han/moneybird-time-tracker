@@ -1,0 +1,51 @@
+{
+	"Name": "Moneybird Timer",
+	"Version": "0.1.0.0",
+	"Author": "Johan Kuijt",
+	"Actions": [
+		{
+			"Name": "Time Tracker",
+			"UUID": "com.johan-kuijt.moneybird-timer.time-tracker",
+			"Icon": "imgs/actions/timer/icon",
+			"Tooltip": "Track time in Moneybird",
+			"PropertyInspectorPath": "ui/time-tracker.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/timer/key_default",
+					"TitleAlignment": "middle"
+				},
+				{
+					"Image": "imgs/actions/timer/key_active",
+					"TitleAlignment": "middle"
+				}
+			]
+		}
+	],
+	"Category": "Moneybird Timer",
+	"CategoryIcon": "imgs/plugin/category-icon",
+	"CodePath": "bin/plugin.js",
+	"Description": "Moneybird hour registration timer",
+	"Icon": "imgs/plugin/marketplace",
+	"SDKVersion": 2,
+	"Software": {
+		"MinimumVersion": "6.4"
+	},
+	"OS": [
+		{
+			"Platform": "mac",
+			"MinimumVersion": "10.15"
+		},
+		{
+			"Platform": "windows",
+			"MinimumVersion": "10"
+		}
+	],
+	"Nodejs": {
+		"Version": "20",
+		"Debug": "enabled"
+	},
+	"UUID": "com.johan-kuijt.moneybird-timer"
+}
