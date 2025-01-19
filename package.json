@@ -1,26 +1,36 @@
 {
-    "scripts": {
-        "build": "rollup -c",
-        "watch": "rollup -c -w --watch.onEnd=\"streamdeck restart com.johan-kuijt.moneybird-timer\""
-    },
-    "type": "module",
-    "devDependencies": {
-        "@elgato/cli": "^1.1.0",
-        "@rollup/plugin-commonjs": "^28.0.0",
-        "@rollup/plugin-json": "^6.1.0",
-        "@rollup/plugin-node-resolve": "^15.2.2",
-        "@rollup/plugin-terser": "^0.4.4",
-        "@rollup/plugin-typescript": "^12.1.0",
-        "@tsconfig/node20": "^20.1.2",
-        "@types/node": "~20.15.0",
-        "rollup": "^4.0.2",
-        "tslib": "^2.6.2",
-        "typescript": "^5.2.2"
-    },
-    "dependencies": {
-        "@elgato/streamdeck": "^1.1.0",
-        "axios": "^1.6.7",
-        "date-fns": "^3.3.1"
-    },
-    "packageManager": "yarn@1.22.22+sha1.ac34549e6aa8e7ead463a7407e1c7390f61a6610"
+  "scripts": {
+    "build": "rollup -c",
+    "watch": "rollup -c -w --watch.onEnd=\"streamdeck restart com.johan-kuijt.moneybird-timer\"",
+    "lint": "eslint \"src/**/*.ts\"",
+    "lint:fix": "eslint \"src/**/*.ts\" --fix",
+    "format": "prettier --write \"src/**/*.{ts,tsx,json}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,json}\""
+  },
+  "type": "module",
+  "devDependencies": {
+    "@elgato/cli": "^1.1.0",
+    "@eslint/js": "^9.18.0",
+    "@rollup/plugin-commonjs": "^28.0.0",
+    "@rollup/plugin-json": "^6.1.0",
+    "@rollup/plugin-node-resolve": "^15.2.2",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-typescript": "^12.1.0",
+    "@tsconfig/node20": "^20.1.2",
+    "@types/node": "~20.15.0",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^10.0.1",
+    "eslint-plugin-prettier": "^5.2.3",
+    "prettier": "^3.4.2",
+    "rollup": "^4.0.2",
+    "tslib": "^2.6.2",
+    "typescript": "^5.2.2",
+    "typescript-eslint": "^8.20.0"
+  },
+  "dependencies": {
+    "@elgato/streamdeck": "^1.1.0",
+    "axios": "^1.6.7",
+    "date-fns": "^3.3.1"
+  },
+  "packageManager": "yarn@1.22.22+sha1.ac34549e6aa8e7ead463a7407e1c7390f61a6610"
 }

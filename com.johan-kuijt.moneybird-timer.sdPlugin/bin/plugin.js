@@ -26947,8 +26947,8 @@ class MoneybirdService {
     }
     getHeaders() {
         return {
-            'Authorization': `Bearer ${this.apiKey}`,
-            'Content-Type': 'application/json'
+            Authorization: `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json',
         };
     }
     handleAxiosError(error) {
@@ -26968,7 +26968,7 @@ class MoneybirdService {
             streamDeck.logger.error('Moneybird API Error Response:', {
                 status: error.response.status,
                 data: error.response.data,
-                headers: error.response.headers
+                headers: error.response.headers,
             });
         }
         else if (error.request) {
@@ -26987,12 +26987,12 @@ class MoneybirdService {
         try {
             streamDeck.logger.debug('Fetching administrations from Moneybird');
             const response = await axios.get(`${this.baseUrl}/administrations.json`, {
-                headers: this.getHeaders()
+                headers: this.getHeaders(),
             });
             // Map the response to our MoneybirdAdministration interface
             return response.data.map((admin) => ({
                 id: admin.id,
-                name: admin.name
+                name: admin.name,
             }));
         }
         catch (error) {
@@ -27003,13 +27003,13 @@ class MoneybirdService {
         try {
             streamDeck.logger.debug(`Fetching users for administration ${administrationId}`);
             const response = await axios.get(`${this.baseUrl}/${administrationId}/users.json`, {
-                headers: this.getHeaders()
+                headers: this.getHeaders(),
             });
             // Map the response to our MoneybirdUser interface
             return response.data.map((user) => ({
                 id: user.id,
                 name: user.name,
-                email: user.email || 'No email'
+                email: user.email || 'No email',
             }));
         }
         catch (error) {
@@ -27023,12 +27023,12 @@ class MoneybirdService {
             }
             streamDeck.logger.debug(`Fetching projects for administration ${this.administrationId}`);
             const response = await axios.get(`${this.baseUrl}/${this.administrationId}/projects.json`, {
-                headers: this.getHeaders()
+                headers: this.getHeaders(),
             });
             // Map the response to our MoneybirdProject interface
             return response.data.map((project) => ({
                 id: project.id,
-                name: project.name
+                name: project.name,
             }));
         }
         catch (error) {
@@ -27056,15 +27056,15 @@ class MoneybirdService {
                     user_id: settings.userId,
                     project_id: settings.projectId,
                     description: settings.description || 'Time registration',
-                    billable: settings.billable !== undefined ? settings.billable : true
-                }
+                    billable: settings.billable !== undefined ? settings.billable : true,
+                },
             };
             streamDeck.logger.debug('Starting timer:', {
                 url: `${this.baseUrl}/${this.administrationId}/time_entries`,
-                data: timeEntry
+                data: timeEntry,
             });
             const response = await axios.post(`${this.baseUrl}/${this.administrationId}/time_entries.json`, timeEntry, {
-                headers: this.getHeaders()
+                headers: this.getHeaders(),
             });
             return response.data;
         }
@@ -27072,7 +27072,7 @@ class MoneybirdService {
             streamDeck.logger.error('Moneybird API error:', {
                 message: error.message,
                 status: error.response?.status,
-                data: error.response?.data
+                data: error.response?.data,
             });
             throw error;
         }
@@ -27081,15 +27081,15 @@ class MoneybirdService {
         try {
             const timeEntry = {
                 time_entry: {
-                    ended_at: this.formatDate(new Date())
-                }
+                    ended_at: this.formatDate(new Date()),
+                },
             };
             streamDeck.logger.debug('Stopping timer:', {
                 url: `${this.baseUrl}/${this.administrationId}/time_entries/${timeEntryId}`,
-                data: timeEntry
+                data: timeEntry,
             });
             const response = await axios.patch(`${this.baseUrl}/${this.administrationId}/time_entries/${timeEntryId}.json`, timeEntry, {
-                headers: this.getHeaders()
+                headers: this.getHeaders(),
             });
             return response.data;
         }
@@ -27097,7 +27097,7 @@ class MoneybirdService {
             streamDeck.logger.error('Moneybird API error in stopTimer:', {
                 message: error.message,
                 status: error.response?.status,
-                data: error.response?.data
+                data: error.response?.data,
             });
             throw error;
         }
@@ -27340,7 +27340,7 @@ function differenceInSeconds(dateLeft, dateRight, options) {
 }
 
 let TimeTracker = (() => {
-    let _classDecorators = [action({ UUID: "com.johan-kuijt.moneybird-timer.time-tracker" })];
+    let _classDecorators = [action({ UUID: 'com.johan-kuijt.moneybird-timer.time-tracker' })];
     let _classDescriptor;
     let _classExtraInitializers = [];
     let _classThis;
@@ -27391,7 +27391,7 @@ let TimeTracker = (() => {
                             apiKey: apiKey,
                             administrations: administrations,
                             projects: projects,
-                            users: users
+                            users: users,
                         });
                     }
                     catch (fetchError) {
@@ -27399,7 +27399,7 @@ let TimeTracker = (() => {
                         streamDeck.logger.error('Error fetching Moneybird data:', {
                             message: fetchError.message,
                             stack: fetchError.stack,
-                            response: fetchError.response?.data
+                            response: fetchError.response?.data,
                         });
                         // Clear settings on error
                         await ev.action.setSettings({
@@ -27407,7 +27407,7 @@ let TimeTracker = (() => {
                             apiKey: apiKey,
                             administrations: [],
                             projects: [],
-                            users: []
+                            users: [],
                         });
                     }
                 }
@@ -27416,7 +27416,7 @@ let TimeTracker = (() => {
                 // Catch any unexpected errors
                 streamDeck.logger.error('Unexpected error in onSendToPlugin:', {
                     message: error.message,
-                    stack: error.stack
+                    stack: error.stack,
                 });
             }
         }

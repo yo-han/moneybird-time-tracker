@@ -13,5 +13,14 @@
 			],
 			"url": "https://schemas.elgato.com/streamdeck/plugins/layout.json"
 		}
-	]
+	],
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": true
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "eslint.validate": ["typescript"]
 }

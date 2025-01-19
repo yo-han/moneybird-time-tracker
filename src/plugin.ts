@@ -1,5 +1,5 @@
-import streamDeck, { LogLevel } from "@elgato/streamdeck";
-import { TimeTracker } from "./actions/time-tracker";
+import streamDeck, { LogLevel } from '@elgato/streamdeck';
+import { TimeTracker } from './actions/time-tracker';
 
 // Enable debug logging
 streamDeck.logger.setLevel(LogLevel.DEBUG);
