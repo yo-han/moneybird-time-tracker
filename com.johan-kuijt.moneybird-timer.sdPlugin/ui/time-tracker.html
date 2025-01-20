@@ -13,10 +13,14 @@
         .hidden {
             display: none;
         }
+        .loading {
+            opacity: 0.5;
+            pointer-events: none;
+        }
     </style>
 </head>
 <body>
-     <sdpi-item label="Display title">
+    <sdpi-item label="Display title">
         <sdpi-textfield id="displayTitle" setting="displayTitle" placeholder="Title of the key"></sdpi-textfield>
     </sdpi-item>
 
@@ -61,40 +65,43 @@
         const { streamDeckClient } = SDPIComponents;
         let isConnected = false;
         let currentSettings = {};
-        
-        const PERSIST_KEY = 'moneybird_timer_last_settings';
+        let currentInstanceId = null;
+        let isLoading = false;
 
-        function isLocalStorageAvailable() {
-            try {
-                const test = '__storage_test__';
-                localStorage.setItem(test, test);
-                localStorage.removeItem(test);
-                return true;
-            } catch(e) {
-                return false;
-            }
+        function setLoading(loading) {
+            isLoading = loading;
+            const selects = document.querySelectorAll('sdpi-select');
+            selects.forEach(select => {
+                if (loading) {
+                    select.classList.add('loading');
+                } else {
+                    select.classList.remove('loading');
+                }
+            });
         }
 
-        function loadPersistedSettings() {
-            if (!isLocalStorageAvailable()) {
-                return {};
-            }
+        function getStorageKeyForInstance(instanceId) {
+            return `moneybird_timer_settings_${instanceId}`;
+        }
+
+        function loadPersistedSettings(instanceId) {
+            if (!instanceId) return {};
 
             try {
-                const persistedSettings = localStorage.getItem(PERSIST_KEY);
+                const key = getStorageKeyForInstance(instanceId);
+                const persistedSettings = localStorage.getItem(key);
                 return persistedSettings ? JSON.parse(persistedSettings) : {};
             } catch (error) {
                 return {};
             }
         }
 
-        function savePersistedSettings(settings) {
-            if (!isLocalStorageAvailable()) {
-                return;
-            }
+        function savePersistedSettings(settings, instanceId) {
+            if (!instanceId) return;
 
             try {
-                const existingSettings = loadPersistedSettings();
+                const key = getStorageKeyForInstance(instanceId);
+                const existingSettings = loadPersistedSettings(instanceId);
                 const settingsToSave = {
                     ...existingSettings,
                     displayTitle: settings.displayTitle || existingSettings.displayTitle,
@@ -105,7 +112,7 @@
                     billable: settings.billable === true || settings.billable === 'true'
                 };
 
-                localStorage.setItem(PERSIST_KEY, JSON.stringify(settingsToSave));
+                localStorage.setItem(key, JSON.stringify(settingsToSave));
             } catch (error) {
                 // Silently fail
             }
@@ -153,20 +160,32 @@
             }
         }
 
-        function updateDropdown(elementId, items = [], valueKey = 'id', nameKey = 'name', defaultText = 'Select an option') {
+        async function updateDropdown(elementId, items = {}, valueKey = 'id', nameKey = 'name', defaultText = 'Select an option') {
             try {
                 const select = document.getElementById(elementId);
                 if (!select) return;
 
                 const options = [{ value: '', text: defaultText }];
-                items.forEach(item => {
-                    if (item?.[valueKey] && item?.[nameKey]) {
-                        options.push({
-                            value: item[valueKey],
-                            text: item[nameKey]
-                        });
-                    }
-                });
+                
+                if (Array.isArray(items)) {
+                    items.forEach(item => {
+                        if (item?.[valueKey] && item?.[nameKey]) {
+                            options.push({
+                                value: item[valueKey],
+                                text: item[nameKey]
+                            });
+                        }
+                    });
+                } else if (typeof items === 'object') {
+                    Object.entries(items).forEach(([key, item]) => {
+                        if (item?.[valueKey] && item?.[nameKey]) {
+                            options.push({
+                                value: item[valueKey],
+                                text: item[nameKey]
+                            });
+                        }
+                    });
+                }
 
                 const optionsHtml = options.map(opt => 
                     `<option value="${opt.value}">${opt.text}</option>`
@@ -184,15 +203,44 @@
             }
         }
 
-        async function loadResources() {
+        async function loadResources(changedField = '') {
+            if (isLoading) return;
+
+            setLoading(true);
             try {
                 const apiKey = document.getElementById('apiKey')?.value;
                 const administrationId = document.getElementById('administrationId')?.value;
 
-                if (!apiKey) return;
+                if (!apiKey) {
+                    setLoading(false);
+                    return;
+                }
 
                 hideError('apiKey');
                 hideError('administrationId');
+
+                if (changedField === 'administrationId') {
+                    if (administrationId) {
+                        // Reset project and user dropdowns immediately to show loading state
+                        await Promise.all([
+                            updateDropdown('projectId', {}, 'id', 'name', 'Loading projects...'),
+                            updateDropdown('userId', {}, 'id', 'name', 'Loading users...')
+                        ]);
+                        
+                        await streamDeckClient.send('sendToPlugin', {
+                            event: 'administrationSelected',
+                            administrationId
+                        });
+                    } else {
+                        // Clear dropdowns if no administration is selected
+                        await Promise.all([
+                            updateDropdown('projectId', {}, 'id', 'name', 'Select a project'),
+                            updateDropdown('userId', {}, 'id', 'name', 'Select a user')
+                        ]);
+                    }
+                    setLoading(false);
+                    return;
+                }
 
                 const payload = { 
                     event: 'setGlobalSettings', 
@@ -204,38 +252,36 @@
                 }
 
                 await streamDeckClient.send('sendToPlugin', payload);
+                setLoading(false);
             } catch (error) {
+                setLoading(false);
                 showError('apiKey', 'Error loading resources');
             }
         }
 
         async function saveSettings() {
-            try {
-                if (!isConnected) return;
+            if (!isConnected || !currentInstanceId) return;
 
-                const settings = {};
-                const elements = document.querySelectorAll('[setting]');
-                
-                elements.forEach(element => {
-                    const settingName = element.getAttribute('setting');
-                    if (settingName) {
-                        let value;
-                        if (element.tagName === 'SDPI-CHECKBOX') {
-                            value = element.value === 'true';
-                        } else {
-                            value = element.value || currentSettings[settingName];
-                        }
-                    
-                        settings[settingName] = value;
+            const settings = {};
+            const elements = document.querySelectorAll('[setting]');
+            
+            elements.forEach(element => {
+                const settingName = element.getAttribute('setting');
+                if (settingName) {
+                    let value;
+                    if (element.tagName === 'SDPI-CHECKBOX') {
+                        value = element.value === 'true';
+                    } else {
+                        value = element.value || currentSettings[settingName];
                     }
-                });
+                
+                    settings[settingName] = value;
+                }
+            });
 
-                await streamDeckClient.setSettings(settings);
-                savePersistedSettings(settings);
-                currentSettings = {...currentSettings, ...settings};
-            } catch (error) {
-                // Silently fail
-            }
+            await streamDeckClient.setSettings(settings);
+            savePersistedSettings(settings, currentInstanceId);
+            currentSettings = {...currentSettings, ...settings};
         }
 
         function initializeEventListeners() {
@@ -249,37 +295,65 @@
                 const apiKeyElement = document.getElementById('apiKey');
                 const adminElement = document.getElementById('administrationId');
 
-                if (apiKeyElement) apiKeyElement.addEventListener('change', loadResources);
-                if (adminElement) adminElement.addEventListener('change', loadResources);
+                if (apiKeyElement) {
+                    apiKeyElement.addEventListener('input', async (e) => {
+                        const value = e.target.value?.trim();
+                        if (value) {
+                            await loadResources('apiKey');
+                        }
+                    });
+                }
+                if (adminElement) {
+                    adminElement.addEventListener('input', async (e) => {
+                        const value = e.target.value?.trim();
+                        if (value) {
+                            await loadResources('administrationId');
+                        } else {
+                            // Reset project and user dropdowns when no administration is selected
+                            updateDropdown('projectId', {});
+                            updateDropdown('userId', {});
+                        }
+                    });
+                }
             } catch (error) {
                 // Silently fail
             }
         }
 
-        streamDeckClient.didReceiveSettings.subscribe(event => {
+        streamDeckClient.didReceiveSettings.subscribe(async event => {
             try {
+                setLoading(true);
                 const settings = event?.payload?.settings || {};
                 
-                const persistedSettings = loadPersistedSettings();
+                const persistedSettings = loadPersistedSettings(currentInstanceId);
                 const mergedSettings = {...settings, ...persistedSettings};
                 
                 currentSettings = mergedSettings;
                 
                 updateFormFields(mergedSettings);
                 
-                if (Array.isArray(settings.administrations)) {
-                    updateDropdown('administrationId', settings.administrations);
+                if (settings.administrations && typeof settings.administrations === 'object') {
+                    await updateDropdown('administrationId', settings.administrations);
                 }
 
-                if (Array.isArray(settings.projects)) {
-                    updateDropdown('projectId', settings.projects);
-                }
+                // If we have a selected administration and received new projects/users
+                const selectedAdminId = document.getElementById('administrationId')?.value;
+                if (selectedAdminId) {
+                    // Update projects if we have them
+                    if (settings.projects && typeof settings.projects === 'object') {
+                        await updateDropdown('projectId', settings.projects);
+                    }
 
-                if (Array.isArray(settings.users)) {
-                    updateDropdown('userId', settings.users);
+                    // Update users if we have them
+                    if (settings.users && typeof settings.users === 'object') {
+                        await updateDropdown('userId', settings.users);
+                    }
                 }
+                
+                setLoading(false);
             } catch (error) {
-                // Silently fail
+                console.error('Error in didReceiveSettings:', error);
+                setLoading(false);
             }
         });
 
@@ -287,9 +361,12 @@
             try {
                 await streamDeckClient.connect(port, uuid, event, JSON.parse(info), JSON.parse(actionInfo));
                 
+                const parsedActionInfo = JSON.parse(actionInfo);
+                currentInstanceId = parsedActionInfo.context;
+                
                 isConnected = true;
                 
-                const persistedSettings = loadPersistedSettings();
+                const persistedSettings = loadPersistedSettings(currentInstanceId);
                 
                 if (Object.keys(persistedSettings).length > 0) {
                     updateFormFields(persistedSettings);
@@ -297,10 +374,13 @@
                 
                 initializeEventListeners();
                 
-                const apiKey = document.getElementById('apiKey')?.value;
+                const apiKey = document.getElementById('apiKey')?.value?.trim();
                 
                 if (apiKey) {
-                    await loadResources();
+                    // Slight delay before loading resources to prevent too many requests
+                    setTimeout(async () => {
+                        await loadResources('apiKey');
+                    }, 100);
                 }
             } catch (error) {
                 // Silently fail

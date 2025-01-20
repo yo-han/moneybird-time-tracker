@@ -10,10 +10,10 @@ export interface TimerSettings extends JsonObject {
   isRunning?: boolean;
   startTime?: string;
   timeEntryId?: string;
-  administrations?: JsonValue;
-  projects?: JsonValue;
-  users?: JsonValue;
-  [key: string]: JsonValue;
+  displayTitle?: string;
+  administrations?: Record<string, JsonValue>;
+  projects?: Record<string, JsonValue>;
+  users?: Record<string, JsonValue>;
 }
 
 export interface TimeEntry {
@@ -24,6 +24,7 @@ export interface TimeEntry {
     user_id: string;
     project_id: string;
     description?: string;
+    billable: boolean;
   };
 }
 
@@ -41,4 +42,27 @@ export interface MoneybirdUser {
   id: string;
   name: string;
   email: string;
+}
+
+// Helper functies om data te converteren naar JsonValue compatibele formaten
+export function projectToJson(project: MoneybirdProject): Record<string, JsonValue> {
+  return {
+    id: project.id,
+    name: project.name,
+  };
+}
+
+export function administrationToJson(admin: MoneybirdAdministration): Record<string, JsonValue> {
+  return {
+    id: admin.id,
+    name: admin.name,
+  };
+}
+
+export function userToJson(user: MoneybirdUser): Record<string, JsonValue> {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+  };
 }

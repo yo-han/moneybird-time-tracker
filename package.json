@@ -1,4 +1,5 @@
 {
+  "version": "0.1.1",
   "scripts": {
     "build": "rollup -c",
     "watch": "rollup -c -w --watch.onEnd=\"streamdeck restart com.johan-kuijt.moneybird-timer\"",

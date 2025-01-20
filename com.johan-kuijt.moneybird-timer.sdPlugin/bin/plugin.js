@@ -22405,7 +22405,7 @@ function requireMs () {
 	 * @api public
 	 */
 
-	ms = function(val, options) {
+	ms = function (val, options) {
 	  options = options || {};
 	  var type = typeof val;
 	  if (type === 'string' && val.length > 0) {
@@ -22718,24 +22718,62 @@ function requireCommon () {
 			createDebug.names = [];
 			createDebug.skips = [];
 
-			let i;
-			const split = (typeof namespaces === 'string' ? namespaces : '').split(/[\s,]+/);
-			const len = split.length;
+			const split = (typeof namespaces === 'string' ? namespaces : '')
+				.trim()
+				.replace(' ', ',')
+				.split(',')
+				.filter(Boolean);
 
-			for (i = 0; i < len; i++) {
-				if (!split[i]) {
-					// ignore empty strings
-					continue;
-				}
-
-				namespaces = split[i].replace(/\*/g, '.*?');
-
-				if (namespaces[0] === '-') {
-					createDebug.skips.push(new RegExp('^' + namespaces.slice(1) + '$'));
+			for (const ns of split) {
+				if (ns[0] === '-') {
+					createDebug.skips.push(ns.slice(1));
 				} else {
-					createDebug.names.push(new RegExp('^' + namespaces + '$'));
+					createDebug.names.push(ns);
 				}
 			}
+		}
+
+		/**
+		 * Checks if the given string matches a namespace template, honoring
+		 * asterisks as wildcards.
+		 *
+		 * @param {String} search
+		 * @param {String} template
+		 * @return {Boolean}
+		 */
+		function matchesTemplate(search, template) {
+			let searchIndex = 0;
+			let templateIndex = 0;
+			let starIndex = -1;
+			let matchIndex = 0;
+
+			while (searchIndex < search.length) {
+				if (templateIndex < template.length && (template[templateIndex] === search[searchIndex] || template[templateIndex] === '*')) {
+					// Match character or proceed with wildcard
+					if (template[templateIndex] === '*') {
+						starIndex = templateIndex;
+						matchIndex = searchIndex;
+						templateIndex++; // Skip the '*'
+					} else {
+						searchIndex++;
+						templateIndex++;
+					}
+				} else if (starIndex !== -1) { // eslint-disable-line no-negated-condition
+					// Backtrack to the last '*' and try to match more characters
+					templateIndex = starIndex + 1;
+					matchIndex++;
+					searchIndex = matchIndex;
+				} else {
+					return false; // No match
+				}
+			}
+
+			// Handle trailing '*' in template
+			while (templateIndex < template.length && template[templateIndex] === '*') {
+				templateIndex++;
+			}
+
+			return templateIndex === template.length;
 		}
 
 		/**
@@ -22746,8 +22784,8 @@ function requireCommon () {
 		*/
 		function disable() {
 			const namespaces = [
-				...createDebug.names.map(toNamespace),
-				...createDebug.skips.map(toNamespace).map(namespace => '-' + namespace)
+				...createDebug.names,
+				...createDebug.skips.map(namespace => '-' + namespace)
 			].join(',');
 			createDebug.enable('');
 			return namespaces;
@@ -22761,39 +22799,19 @@ function requireCommon () {
 		* @api public
 		*/
 		function enabled(name) {
-			if (name[name.length - 1] === '*') {
-				return true;
-			}
-
-			let i;
-			let len;
-
-			for (i = 0, len = createDebug.skips.length; i < len; i++) {
-				if (createDebug.skips[i].test(name)) {
+			for (const skip of createDebug.skips) {
+				if (matchesTemplate(name, skip)) {
 					return false;
 				}
 			}
 
-			for (i = 0, len = createDebug.names.length; i < len; i++) {
-				if (createDebug.names[i].test(name)) {
+			for (const ns of createDebug.names) {
+				if (matchesTemplate(name, ns)) {
 					return true;
 				}
 			}
 
 			return false;
-		}
-
-		/**
-		* Convert regexp to namespace
-		*
-		* @param {RegExp} regxep
-		* @return {String} namespace
-		* @api private
-		*/
-		function toNamespace(regexp) {
-			return regexp.toString()
-				.substring(2, regexp.toString().length - 2)
-				.replace(/\.\*\?$/, '*');
 		}
 
 		/**
@@ -22964,6 +22982,7 @@ function requireBrowser () {
 
 			// Is webkit? http://stackoverflow.com/a/16459606/376773
 			// document is undefined in react-native: https://github.com/facebook/react-native/pull/1632
+			// eslint-disable-next-line no-return-assign
 			return (typeof document !== 'undefined' && document.documentElement && document.documentElement.style && document.documentElement.style.WebkitAppearance) ||
 				// Is firebug? http://stackoverflow.com/a/398120/376773
 				(typeof window !== 'undefined' && window.console && (window.console.firebug || (window.console.exception && window.console.table))) ||
@@ -26940,7 +26959,6 @@ class MoneybirdService {
     constructor(apiKey, administrationId) {
         this.apiKey = apiKey;
         this.administrationId = administrationId;
-        // Validate API key
         if (!apiKey || apiKey.trim() === '') {
             throw new Error('Invalid API key');
         }
@@ -26972,12 +26990,10 @@ class MoneybirdService {
             });
         }
         else if (error.request) {
-            // The request was made but no response was received
             errorMessage = 'No response received from Moneybird API. Check your internet connection.';
             streamDeck.logger.error('No response from Moneybird API:', error.request);
         }
         else {
-            // Something happened in setting up the request that triggered an Error
             errorMessage = `Request setup error: ${error.message}`;
             streamDeck.logger.error('Moneybird API Request Error:', error.message);
         }
@@ -26989,7 +27005,6 @@ class MoneybirdService {
             const response = await axios.get(`${this.baseUrl}/administrations.json`, {
                 headers: this.getHeaders(),
             });
-            // Map the response to our MoneybirdAdministration interface
             return response.data.map((admin) => ({
                 id: admin.id,
                 name: admin.name,
@@ -27005,7 +27020,6 @@ class MoneybirdService {
             const response = await axios.get(`${this.baseUrl}/${administrationId}/users.json`, {
                 headers: this.getHeaders(),
             });
-            // Map the response to our MoneybirdUser interface
             return response.data.map((user) => ({
                 id: user.id,
                 name: user.name,
@@ -27025,7 +27039,6 @@ class MoneybirdService {
             const response = await axios.get(`${this.baseUrl}/${this.administrationId}/projects.json`, {
                 headers: this.getHeaders(),
             });
-            // Map the response to our MoneybirdProject interface
             return response.data.map((project) => ({
                 id: project.id,
                 name: project.name,
@@ -27102,6 +27115,27 @@ class MoneybirdService {
             throw error;
         }
     }
+}
+
+// Helper functies om data te converteren naar JsonValue compatibele formaten
+function projectToJson(project) {
+    return {
+        id: project.id,
+        name: project.name,
+    };
+}
+function administrationToJson(admin) {
+    return {
+        id: admin.id,
+        name: admin.name,
+    };
+}
+function userToJson(user) {
+    return {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+    };
 }
 
 /**
@@ -27354,75 +27388,126 @@ let TimeTracker = (() => {
             if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
             __runInitializers(_classThis, _classExtraInitializers);
         }
-        updateInterval;
+        updateIntervals = new Map();
         getImagePath(type) {
             const baseDir = 'imgs/actions/timer';
             const imageName = `key_${type}.png`;
             return require$$1$4.join(baseDir, imageName);
         }
+        async onDidReceiveSettings(ev) {
+            try {
+                const settings = ev.payload.settings;
+                const instanceId = ev.action.id;
+                if (settings.displayTitle !== undefined && !settings.isRunning) {
+                    const title = settings.displayTitle || 'Start';
+                    await ev.action.setTitle(String(title));
+                }
+                streamDeck.logger.debug(`Settings updated for instance ${instanceId}:`, settings);
+            }
+            catch (error) {
+                streamDeck.logger.error('Error in onDidReceiveSettings:', error);
+            }
+        }
         async onSendToPlugin(ev) {
             try {
                 streamDeck.logger.debug('Plugin received SendToPlugin message:', JSON.stringify(ev.payload, null, 2));
-                if (ev.payload && ev.payload.event === 'setGlobalSettings') {
-                    const { apiKey, administrationId } = ev.payload;
-                    // Validate API key is not empty
-                    if (!apiKey) {
-                        streamDeck.logger.warn('No API key provided');
-                        return;
-                    }
-                    try {
-                        // First, create service with just API key to fetch administrations
-                        const moneybirdService = new MoneybirdService(apiKey);
-                        // Fetch administrations
-                        const administrations = await moneybirdService.getAdministrations();
-                        streamDeck.logger.debug(`Fetched ${administrations.length} administrations`);
-                        // If a specific administration is selected, fetch its projects and users
-                        let projects = [];
-                        let users = [];
-                        if (administrationId) {
-                            const selectedService = new MoneybirdService(apiKey, administrationId);
-                            projects = await selectedService.getProjects();
-                            users = await selectedService.getUsers(administrationId);
-                            streamDeck.logger.debug(`Fetched ${projects.length} projects and ${users.length} users for administration ${administrationId}`);
-                        }
-                        // Send data back to the property inspector
-                        await ev.action.setSettings({
-                            ...ev.payload.settings,
-                            apiKey: apiKey,
-                            administrations: administrations,
-                            projects: projects,
-                            users: users,
-                        });
-                    }
-                    catch (fetchError) {
-                        // More detailed error logging
-                        streamDeck.logger.error('Error fetching Moneybird data:', {
-                            message: fetchError.message,
-                            stack: fetchError.stack,
-                            response: fetchError.response?.data,
-                        });
-                        // Clear settings on error
-                        await ev.action.setSettings({
-                            ...ev.payload.settings,
-                            apiKey: apiKey,
-                            administrations: [],
-                            projects: [],
-                            users: [],
-                        });
-                    }
+                // Split in twee separate logica flows
+                if (ev.payload?.event === 'setGlobalSettings') {
+                    await this.handleGlobalSettings(ev);
+                }
+                else if (ev.payload?.event === 'administrationSelected') {
+                    await this.handleAdministrationChange(ev);
                 }
             }
             catch (error) {
-                // Catch any unexpected errors
                 streamDeck.logger.error('Unexpected error in onSendToPlugin:', {
                     message: error.message,
                     stack: error.stack,
                 });
             }
         }
+        async handleAdministrationChange(ev) {
+            const { administrationId } = ev.payload;
+            const currentSettings = await ev.action.getSettings();
+            if (!currentSettings.apiKey || !administrationId) {
+                return;
+            }
+            try {
+                const moneybirdService = new MoneybirdService(currentSettings.apiKey, administrationId);
+                // Parallel ophalen van projects en users
+                const [rawProjects, rawUsers] = await Promise.all([
+                    moneybirdService.getProjects(),
+                    moneybirdService.getUsers(administrationId),
+                ]);
+                const projects = Object.fromEntries(rawProjects.map(project => [project.id, projectToJson(project)]));
+                const users = Object.fromEntries(rawUsers.map(user => [user.id, userToJson(user)]));
+                streamDeck.logger.debug(`Fetched ${rawProjects.length} projects and ${rawUsers.length} users for administration ${administrationId}`);
+                const newSettings = {
+                    ...currentSettings,
+                    administrationId,
+                    projects,
+                    users,
+                    projectId: '',
+                    userId: '',
+                };
+                await ev.action.setSettings(newSettings);
+            }
+            catch (fetchError) {
+                streamDeck.logger.error('Error fetching Moneybird data:', {
+                    message: fetchError.message,
+                    stack: fetchError.stack,
+                    response: fetchError.response?.data,
+                });
+            }
+        }
+        async handleGlobalSettings(ev) {
+            const { apiKey, administrationId } = ev.payload;
+            const currentSettings = await ev.action.getSettings();
+            if (!apiKey) {
+                streamDeck.logger.warn('No API key provided');
+                return;
+            }
+            try {
+                const moneybirdService = new MoneybirdService(apiKey);
+                const rawAdministrations = await moneybirdService.getAdministrations();
+                const administrations = Object.fromEntries(rawAdministrations.map(admin => [admin.id, administrationToJson(admin)]));
+                streamDeck.logger.debug(`Fetched ${rawAdministrations.length} administrations`);
+                const newSettings = {
+                    ...currentSettings,
+                    apiKey,
+                    administrations,
+                    description: currentSettings.description,
+                    billable: currentSettings.billable,
+                    isRunning: currentSettings.isRunning,
+                    startTime: currentSettings.startTime,
+                    timeEntryId: currentSettings.timeEntryId,
+                    displayTitle: currentSettings.displayTitle,
+                };
+                await ev.action.setSettings(newSettings);
+                if (administrationId) {
+                    await this.handleAdministrationChange(ev);
+                }
+            }
+            catch (fetchError) {
+                streamDeck.logger.error('Error fetching Moneybird data:', {
+                    message: fetchError.message,
+                    stack: fetchError.stack,
+                    response: fetchError.response?.data,
+                });
+                const clearedSettings = {
+                    ...currentSettings,
+                    apiKey,
+                    administrations: {},
+                    projects: {},
+                    users: {},
+                };
+                await ev.action.setSettings(clearedSettings);
+            }
+        }
         async onWillAppear(ev) {
             const settings = ev.payload.settings;
-            streamDeck.logger.debug('Action appeared with settings:', settings);
+            const instanceId = ev.action.id;
+            streamDeck.logger.debug(`Action appeared with settings for instance ${instanceId}:`, settings);
             if (settings.isRunning && settings.startTime) {
                 await this.updateTimerDisplay(ev);
                 this.startUpdateInterval(ev);
@@ -27433,14 +27518,18 @@ let TimeTracker = (() => {
                 await ev.action.setTitle(String(title));
             }
         }
-        async onWillDisappear() {
-            if (this.updateInterval) {
-                clearInterval(this.updateInterval);
+        async onWillDisappear(ev) {
+            const instanceId = ev.action.id;
+            const interval = this.updateIntervals.get(instanceId);
+            if (interval) {
+                clearInterval(interval);
+                this.updateIntervals.delete(instanceId);
             }
         }
         async onKeyDown(ev) {
             const settings = ev.payload.settings;
-            streamDeck.logger.debug('Key pressed with settings:', settings);
+            const instanceId = ev.action.id;
+            streamDeck.logger.debug(`Key pressed for instance ${instanceId} with settings:`, settings);
             if (!settings.apiKey || !settings.administrationId || !settings.projectId || !settings.userId) {
                 streamDeck.logger.debug('Missing required settings');
                 await ev.action.setImage(this.getImagePath('default'));
@@ -27450,59 +27539,91 @@ let TimeTracker = (() => {
             const moneybirdService = new MoneybirdService(settings.apiKey, settings.administrationId);
             try {
                 if (!settings.isRunning) {
-                    streamDeck.logger.debug('Starting timer');
+                    streamDeck.logger.debug(`Starting timer for instance ${instanceId}`);
                     const timeEntry = await moneybirdService.startTimer(settings);
-                    settings.isRunning = true;
-                    settings.startTime = new Date().toISOString();
-                    settings.timeEntryId = timeEntry.id;
-                    await ev.action.setSettings(settings);
-                    await this.updateTimerDisplay(ev);
-                    this.startUpdateInterval(ev);
-                    streamDeck.logger.debug('Timer started successfully');
+                    const newSettings = {
+                        ...settings,
+                        isRunning: true,
+                        startTime: new Date().toISOString(),
+                        timeEntryId: timeEntry.id,
+                    };
+                    await ev.action.setSettings(newSettings);
+                    const updatedEvent = {
+                        ...ev,
+                        payload: {
+                            ...ev.payload,
+                            settings: newSettings,
+                        },
+                    };
+                    await this.updateTimerDisplay(updatedEvent);
+                    this.startUpdateInterval(updatedEvent);
+                    streamDeck.logger.debug(`Timer started successfully for instance ${instanceId}`);
                 }
                 else {
-                    streamDeck.logger.debug('Stopping timer');
+                    // Stop de timer
+                    streamDeck.logger.debug(`Stopping timer for instance ${instanceId}`);
                     if (!settings.timeEntryId) {
                         throw new Error('No time entry ID found');
                     }
                     await moneybirdService.stopTimer(settings.timeEntryId);
-                    streamDeck.logger.debug('Timer stopped successfully');
-                    settings.isRunning = false;
-                    settings.startTime = undefined;
-                    settings.timeEntryId = undefined;
-                    await ev.action.setSettings(settings);
+                    streamDeck.logger.debug(`Timer stopped successfully for instance ${instanceId}`);
+                    const newSettings = {
+                        ...settings,
+                        isRunning: false,
+                        startTime: undefined,
+                        timeEntryId: undefined,
+                    };
+                    await ev.action.setSettings(newSettings);
                     await ev.action.setImage(this.getImagePath('default'));
                     const title = settings.displayTitle ? settings.displayTitle : 'Start';
                     await ev.action.setTitle(String(title));
-                    if (this.updateInterval) {
-                        clearInterval(this.updateInterval);
+                    const interval = this.updateIntervals.get(instanceId);
+                    if (interval) {
+                        clearInterval(interval);
+                        this.updateIntervals.delete(instanceId);
                     }
                 }
             }
             catch (error) {
-                streamDeck.logger.error('Error managing timer:', error);
+                streamDeck.logger.error(`Error managing timer for instance ${instanceId}:`, error);
                 await ev.action.setImage(this.getImagePath('error'));
                 await ev.action.setTitle('Error');
-                settings.isRunning = false;
-                settings.startTime = undefined;
-                settings.timeEntryId = undefined;
-                await ev.action.setSettings(settings);
-                if (this.updateInterval) {
-                    clearInterval(this.updateInterval);
+                const newSettings = {
+                    ...settings,
+                    isRunning: false,
+                    startTime: undefined,
+                    timeEntryId: undefined,
+                };
+                await ev.action.setSettings(newSettings);
+                const interval = this.updateIntervals.get(instanceId);
+                if (interval) {
+                    clearInterval(interval);
+                    this.updateIntervals.delete(instanceId);
                 }
             }
         }
         startUpdateInterval(ev) {
-            if (this.updateInterval) {
-                clearInterval(this.updateInterval);
+            const instanceId = ev.action.id;
+            const settings = ev.payload.settings;
+            streamDeck.logger.debug('Starting update interval with settings:', JSON.stringify(settings, null, 2));
+            if (!settings || !settings.isRunning || !settings.startTime) {
+                streamDeck.logger.debug('Not starting interval - conditions not met');
+                return;
             }
-            this.updateInterval = setInterval(() => {
-                this.updateTimerDisplay(ev).catch(error => streamDeck.logger.error('Error updating display:', error));
+            const existingInterval = this.updateIntervals.get(instanceId);
+            if (existingInterval) {
+                clearInterval(existingInterval);
+            }
+            const interval = setInterval(() => {
+                this.updateTimerDisplay(ev).catch(error => streamDeck.logger.error(`Error updating display for instance ${instanceId}:`, error));
             }, 1000);
+            this.updateIntervals.set(instanceId, interval);
+            streamDeck.logger.debug(`Interval started for instance ${instanceId}`);
         }
         async updateTimerDisplay(ev) {
             const settings = ev.payload.settings;
-            if (settings.startTime) {
+            streamDeck.logger.debug('updateTimerDisplay called with settings:', JSON.stringify(settings, null, 2));
+            if (settings && settings.isRunning && settings.startTime) {
                 const startDate = new Date(settings.startTime);
                 const now = new Date();
                 const totalSeconds = differenceInSeconds(now, startDate);
@@ -27520,20 +27641,27 @@ let TimeTracker = (() => {
                     displayTime = `${totalHours}h`;
                 }
                 imagePath = this.getImagePath('active');
-                await ev.action.setTitle(`⏱️ ${displayTime}`);
-                await ev.action.setImage(imagePath);
+                streamDeck.logger.debug(`Setting title to: ⏱️ ${displayTime}`);
+                streamDeck.logger.debug(`Setting image to: ${imagePath}`);
+                try {
+                    await ev.action.setTitle(`⏱️ ${displayTime}`);
+                    await ev.action.setImage(imagePath);
+                }
+                catch (error) {
+                    streamDeck.logger.error('Error updating timer display:', error);
+                }
+            }
+            else {
+                streamDeck.logger.debug('Not updating timer display - conditions not met');
             }
         }
     });
     return _classThis;
 })();
 
-// Enable debug logging
-streamDeck.logger.setLevel(LogLevel.DEBUG);
-// Create an instance of the TimeTracker action
+// streamDeck.logger.setLevel(LogLevel.DEBUG);
+streamDeck.logger.setLevel(LogLevel.INFO);
 const timeTrackerAction = new TimeTracker();
-// Register the time tracker action
 streamDeck.actions.registerAction(timeTrackerAction);
-// Connect to the Stream Deck
 streamDeck.connect();
 //# sourceMappingURL=plugin.js.map

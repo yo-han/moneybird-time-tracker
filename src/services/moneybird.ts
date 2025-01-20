@@ -15,7 +15,6 @@ export class MoneybirdService {
     private readonly apiKey: string,
     private readonly administrationId?: string
   ) {
-    // Validate API key
     if (!apiKey || apiKey.trim() === '') {
       throw new Error('Invalid API key');
     }
@@ -48,11 +47,9 @@ export class MoneybirdService {
         headers: error.response.headers,
       });
     } else if (error.request) {
-      // The request was made but no response was received
       errorMessage = 'No response received from Moneybird API. Check your internet connection.';
       streamDeck.logger.error('No response from Moneybird API:', error.request);
     } else {
-      // Something happened in setting up the request that triggered an Error
       errorMessage = `Request setup error: ${error.message}`;
       streamDeck.logger.error('Moneybird API Request Error:', error.message);
     }
@@ -67,7 +64,6 @@ export class MoneybirdService {
         headers: this.getHeaders(),
       });
 
-      // Map the response to our MoneybirdAdministration interface
       return response.data.map((admin: any) => ({
         id: admin.id,
         name: admin.name,
@@ -84,7 +80,6 @@ export class MoneybirdService {
         headers: this.getHeaders(),
       });
 
-      // Map the response to our MoneybirdUser interface
       return response.data.map((user: any) => ({
         id: user.id,
         name: user.name,
@@ -106,7 +101,6 @@ export class MoneybirdService {
         headers: this.getHeaders(),
       });
 
-      // Map the response to our MoneybirdProject interface
       return response.data.map((project: any) => ({
         id: project.id,
         name: project.name,
