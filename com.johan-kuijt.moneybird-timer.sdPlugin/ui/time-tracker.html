@@ -90,6 +90,7 @@
             try {
                 const key = getStorageKeyForInstance(instanceId);
                 const persistedSettings = localStorage.getItem(key);
+                
                 return persistedSettings ? JSON.parse(persistedSettings) : {};
             } catch (error) {
                 return {};
@@ -109,7 +110,6 @@
                     projectId: settings.projectId || existingSettings.projectId,
                     userId: settings.userId || existingSettings.userId,
                     description: settings.description || existingSettings.description,
-                    billable: settings.billable === true || settings.billable === 'true'
                 };
 
                 localStorage.setItem(key, JSON.stringify(settingsToSave));
@@ -135,7 +135,7 @@
 
         function updateFormFields(settings = {}) {
             try {
-                const relevantKeys = ['apiKey', 'displayTitle', 'administrationId', 'projectId', 'userId', 'description', 'billable'];
+                const relevantKeys = ['apiKey', 'displayTitle', 'administrationId', 'projectId', 'userId', 'description'];
                 
                 relevantKeys.forEach(key => {
                     const value = settings[key];
@@ -143,11 +143,8 @@
                         try {
                             const element = document.getElementById(key);
                             if (element) {
-                                if (element.tagName === 'SDPI-CHECKBOX') {
-                                    element.value = value === true || value === 'true' ? 'true' : 'false';
-                                } else {
-                                    element.value = value?.toString() || '';
-                                }
+                                
+                                element.value = value?.toString() || '';
                                 hideError(key);
                             }
                         } catch (fieldError) {
@@ -267,11 +264,13 @@
             
             elements.forEach(element => {
                 const settingName = element.getAttribute('setting');
+                
                 if (settingName) {
                     let value;
                     if (element.tagName === 'SDPI-CHECKBOX') {
-                        value = element.value === 'true';
+                        value = element.value === true || element.value === 'true';
                     } else {
+                      console.log('ELSE', element.value, settingName);
                         value = element.value || currentSettings[settingName];
                     }
                 

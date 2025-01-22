@@ -128,13 +128,20 @@ export class MoneybirdService {
 
   async startTimer(settings: TimerSettings): Promise<TimeEntry> {
     try {
+      let billable = settings.billable;
+      if (settings.billable === undefined) {
+        billable = true;
+      } else if (typeof settings.billable == 'string') {
+        billable = settings.billable == 'true';
+      }
+
       const timeEntry = {
         time_entry: {
           started_at: this.formatDate(new Date()),
           user_id: settings.userId,
           project_id: settings.projectId,
           description: settings.description || 'Time registration',
-          billable: settings.billable !== undefined ? settings.billable : true,
+          billable,
         },
       };
 

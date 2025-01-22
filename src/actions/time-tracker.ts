@@ -128,7 +128,6 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         apiKey,
         administrations,
         description: currentSettings.description,
-        billable: currentSettings.billable,
         isRunning: currentSettings.isRunning,
         startTime: currentSettings.startTime,
         timeEntryId: currentSettings.timeEntryId,
@@ -313,10 +312,10 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   ): Promise<void> {
     const settings = ev.payload.settings;
 
-    streamDeck.logger.debug(
-      'updateTimerDisplay called with settings:',
-      JSON.stringify(settings, null, 2)
-    );
+    // streamDeck.logger.debug(
+    //   'updateTimerDisplay called with settings:',
+    //   JSON.stringify(settings, null, 2)
+    // );
 
     if (settings && settings.isRunning && settings.startTime) {
       const startDate = new Date(settings.startTime);
@@ -338,8 +337,8 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
       imagePath = this.getImagePath('active');
 
-      streamDeck.logger.debug(`Setting title to: ⏱️ ${displayTime}`);
-      streamDeck.logger.debug(`Setting image to: ${imagePath}`);
+      // streamDeck.logger.debug(`Setting title to: ⏱️ ${displayTime}`);
+      // streamDeck.logger.debug(`Setting image to: ${imagePath}`);
 
       try {
         await ev.action.setTitle(`⏱️ ${displayTime}`);

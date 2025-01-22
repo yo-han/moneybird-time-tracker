@@ -27063,13 +27063,20 @@ class MoneybirdService {
     }
     async startTimer(settings) {
         try {
+            let billable = settings.billable;
+            if (settings.billable === undefined) {
+                billable = true;
+            }
+            else if (typeof settings.billable == 'string') {
+                billable = settings.billable == 'true';
+            }
             const timeEntry = {
                 time_entry: {
                     started_at: this.formatDate(new Date()),
                     user_id: settings.userId,
                     project_id: settings.projectId,
                     description: settings.description || 'Time registration',
-                    billable: settings.billable !== undefined ? settings.billable : true,
+                    billable,
                 },
             };
             streamDeck.logger.debug('Starting timer:', {
@@ -27411,7 +27418,6 @@ let TimeTracker = (() => {
         async onSendToPlugin(ev) {
             try {
                 streamDeck.logger.debug('Plugin received SendToPlugin message:', JSON.stringify(ev.payload, null, 2));
-                // Split in twee separate logica flows
                 if (ev.payload?.event === 'setGlobalSettings') {
                     await this.handleGlobalSettings(ev);
                 }
@@ -27434,7 +27440,6 @@ let TimeTracker = (() => {
             }
             try {
                 const moneybirdService = new MoneybirdService(currentSettings.apiKey, administrationId);
-                // Parallel ophalen van projects en users
                 const [rawProjects, rawUsers] = await Promise.all([
                     moneybirdService.getProjects(),
                     moneybirdService.getUsers(administrationId),
@@ -27477,7 +27482,6 @@ let TimeTracker = (() => {
                     apiKey,
                     administrations,
                     description: currentSettings.description,
-                    billable: currentSettings.billable,
                     isRunning: currentSettings.isRunning,
                     startTime: currentSettings.startTime,
                     timeEntryId: currentSettings.timeEntryId,
@@ -27560,7 +27564,6 @@ let TimeTracker = (() => {
                     streamDeck.logger.debug(`Timer started successfully for instance ${instanceId}`);
                 }
                 else {
-                    // Stop de timer
                     streamDeck.logger.debug(`Stopping timer for instance ${instanceId}`);
                     if (!settings.timeEntryId) {
                         throw new Error('No time entry ID found');
@@ -27622,7 +27625,10 @@ let TimeTracker = (() => {
         }
         async updateTimerDisplay(ev) {
             const settings = ev.payload.settings;
-            streamDeck.logger.debug('updateTimerDisplay called with settings:', JSON.stringify(settings, null, 2));
+            // streamDeck.logger.debug(
+            //   'updateTimerDisplay called with settings:',
+            //   JSON.stringify(settings, null, 2)
+            // );
             if (settings && settings.isRunning && settings.startTime) {
                 const startDate = new Date(settings.startTime);
                 const now = new Date();
@@ -27641,8 +27647,8 @@ let TimeTracker = (() => {
                     displayTime = `${totalHours}h`;
                 }
                 imagePath = this.getImagePath('active');
-                streamDeck.logger.debug(`Setting title to: ⏱️ ${displayTime}`);
-                streamDeck.logger.debug(`Setting image to: ${imagePath}`);
+                // streamDeck.logger.debug(`Setting title to: ⏱️ ${displayTime}`);
+                // streamDeck.logger.debug(`Setting image to: ${imagePath}`);
                 try {
                     await ev.action.setTitle(`⏱️ ${displayTime}`);
                     await ev.action.setImage(imagePath);
@@ -27659,8 +27665,8 @@ let TimeTracker = (() => {
     return _classThis;
 })();
 
-// streamDeck.logger.setLevel(LogLevel.DEBUG);
-streamDeck.logger.setLevel(LogLevel.INFO);
+streamDeck.logger.setLevel(LogLevel.DEBUG);
+// streamDeck.logger.setLevel(LogLevel.INFO);
 const timeTrackerAction = new TimeTracker();
 streamDeck.actions.registerAction(timeTrackerAction);
 streamDeck.connect();
