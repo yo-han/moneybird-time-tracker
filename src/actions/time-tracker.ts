@@ -21,6 +21,7 @@ import path from 'path';
 @action({ UUID: 'com.johan-kuijt.moneybird-timer.time-tracker' })
 export class TimeTracker extends SingletonAction<TimerSettings> {
   private updateIntervals: Map<string, NodeJS.Timeout> = new Map();
+  private autoStopTimeouts: Map<string, NodeJS.Timeout> = new Map();
 
   private getImagePath(type: 'default' | 'active' | 'error'): string {
     const baseDir = 'imgs/actions/timer';
@@ -180,6 +181,22 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     if (settings.isRunning && settings.startTime) {
       await this.updateTimerDisplay(ev);
       this.startUpdateInterval(ev);
+
+      // Set up auto-stop if enabled and timer is running
+      if (settings.autoStopEnabled && settings.autoStopHours) {
+        // Calculate remaining time
+        const startDate = new Date(settings.startTime);
+        const now = new Date();
+        const elapsedHours = (now.getTime() - startDate.getTime()) / (1000 * 60 * 60);
+        const remainingHours = settings.autoStopHours - elapsedHours;
+
+        if (remainingHours > 0) {
+          this.setupAutoStop(instanceId, remainingHours, ev);
+        } else {
+          // Timer should have already stopped, trigger auto-stop now
+          this.setupAutoStop(instanceId, 0.001, ev); // Trigger almost immediately
+        }
+      }
     } else {
       await ev.action.setImage(this.getImagePath('default'));
 
@@ -190,10 +207,19 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
   override async onWillDisappear(ev: WillDisappearEvent<TimerSettings>): Promise<void> {
     const instanceId = ev.action.id;
+
+    // Clear update interval
     const interval = this.updateIntervals.get(instanceId);
     if (interval) {
       clearInterval(interval);
       this.updateIntervals.delete(instanceId);
+    }
+
+    // Clear auto-stop timeout
+    const timeout = this.autoStopTimeouts.get(instanceId);
+    if (timeout) {
+      clearTimeout(timeout);
+      this.autoStopTimeouts.delete(instanceId);
     }
   }
 
@@ -237,6 +263,11 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         await this.updateTimerDisplay(updatedEvent);
         this.startUpdateInterval(updatedEvent);
 
+        // Set up auto-stop if enabled
+        if (settings.autoStopEnabled && settings.autoStopHours) {
+          this.setupAutoStop(instanceId, settings.autoStopHours, updatedEvent);
+        }
+
         streamDeck.logger.debug(`Timer started successfully for instance ${instanceId}`);
       } else {
         streamDeck.logger.debug(`Stopping timer for instance ${instanceId}`);
@@ -266,6 +297,13 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
           clearInterval(interval);
           this.updateIntervals.delete(instanceId);
         }
+
+        // Clear auto-stop timeout
+        const autoStopTimeout = this.autoStopTimeouts.get(instanceId);
+        if (autoStopTimeout) {
+          clearTimeout(autoStopTimeout);
+          this.autoStopTimeouts.delete(instanceId);
+        }
       }
     } catch (error: any) {
       streamDeck.logger.error(`Error managing timer for instance ${instanceId}:`, error);
@@ -285,6 +323,13 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       if (interval) {
         clearInterval(interval);
         this.updateIntervals.delete(instanceId);
+      }
+
+      // Clear auto-stop timeout on error
+      const autoStopTimeout = this.autoStopTimeouts.get(instanceId);
+      if (autoStopTimeout) {
+        clearTimeout(autoStopTimeout);
+        this.autoStopTimeouts.delete(instanceId);
       }
     }
   }
@@ -350,6 +395,17 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
       const imagePath = this.getImagePath('active');
 
+      // Check if we're approaching auto-stop time
+      if (settings.autoStopEnabled && settings.autoStopHours) {
+        const elapsedHours = totalSeconds / 3600;
+        const remainingMinutes = (settings.autoStopHours - elapsedHours) * 60;
+
+        if (remainingMinutes <= 5 && remainingMinutes > 0) {
+          // Show warning in last 5 minutes
+          displayTime = `⚠️ ${displayTime}`;
+        }
+      }
+
       // streamDeck.logger.debug(`Setting title to: ⏱️ ${displayTime}`);
       // streamDeck.logger.debug(`Setting image to: ${imagePath}`);
 
@@ -362,5 +418,72 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     } else {
       streamDeck.logger.debug('Not updating timer display - conditions not met');
     }
+  }
+
+  private setupAutoStop(
+    instanceId: string,
+    hours: number,
+    ev: WillAppearEvent<TimerSettings> | KeyDownEvent<TimerSettings>
+  ): void {
+    // Clear any existing timeout
+    const existingTimeout = this.autoStopTimeouts.get(instanceId);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+
+    // Set new timeout
+    const milliseconds = hours * 60 * 60 * 1000;
+    streamDeck.logger.debug(`Setting auto-stop for instance ${instanceId} after ${hours} hours`);
+
+    const timeout = setTimeout(async () => {
+      streamDeck.logger.debug(`Auto-stop triggered for instance ${instanceId}`);
+
+      try {
+        const settings = await ev.action.getSettings();
+
+        if (settings.isRunning && settings.timeEntryId) {
+          // Stop the timer
+          const moneybirdService = new MoneybirdService(settings.apiKey, settings.administrationId);
+          await moneybirdService.stopTimer(settings.timeEntryId);
+
+          // Update settings
+          const newSettings = {
+            ...settings,
+            isRunning: false,
+            startTime: undefined,
+            timeEntryId: undefined,
+          };
+
+          await ev.action.setSettings(newSettings);
+          await ev.action.setImage(this.getImagePath('default'));
+          await ev.action.setTitle('Auto-stopped');
+
+          // Clear intervals
+          const interval = this.updateIntervals.get(instanceId);
+          if (interval) {
+            clearInterval(interval);
+            this.updateIntervals.delete(instanceId);
+          }
+
+          // Show notification
+          streamDeck.logger.info(
+            `Timer auto-stopped after ${hours} hours for instance ${instanceId}`
+          );
+
+          // Reset title after 3 seconds
+          setTimeout(async () => {
+            const title = settings.displayTitle || 'Start';
+            await ev.action.setTitle(String(title));
+          }, 3000);
+        }
+      } catch (error) {
+        streamDeck.logger.error(`Error during auto-stop for instance ${instanceId}:`, error);
+      }
+
+      // Remove timeout from map
+      this.autoStopTimeouts.delete(instanceId);
+    }, milliseconds);
+
+    this.autoStopTimeouts.set(instanceId, timeout);
   }
 }

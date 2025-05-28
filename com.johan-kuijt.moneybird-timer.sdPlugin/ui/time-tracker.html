@@ -17,6 +17,7 @@
             opacity: 0.5;
             pointer-events: none;
         }
+        /* Force refresh: v2 */
     </style>
 </head>
 <body>
@@ -63,6 +64,32 @@
 
     <sdpi-item label="Billable">
         <sdpi-checkbox id="billable" setting="billable"></sdpi-checkbox>
+    </sdpi-item>
+    
+    <sdpi-item label="Enable Auto-stop">
+        <sdpi-checkbox id="autoStopEnabled" setting="autoStopEnabled"></sdpi-checkbox>
+    </sdpi-item>
+
+    <sdpi-item label="Stop after">
+        <sdpi-select id="autoStopHours" setting="autoStopHours">
+            <option value="0.5">30 minutes</option>
+            <option value="1">1 hour</option>
+            <option value="1.5">1.5 hours</option>
+            <option value="2">2 hours</option>
+            <option value="2.5">2.5 hours</option>
+            <option value="3">3 hours</option>
+            <option value="3.5">3.5 hours</option>
+            <option value="4" selected>4 hours</option>
+            <option value="4.5">4.5 hours</option>
+            <option value="5">5 hours</option>
+            <option value="6">6 hours</option>
+            <option value="7">7 hours</option>
+            <option value="8">8 hours</option>
+            <option value="9">9 hours</option>
+            <option value="10">10 hours</option>
+            <option value="11">11 hours</option>
+            <option value="12">12 hours</option>
+        </sdpi-select>
     </sdpi-item>
 
     <script>
@@ -124,6 +151,17 @@
                 const billableElement = document.getElementById('billable');
                 if (billableElement && settings.billable !== undefined) {
                     billableElement.value = settings.billable;
+                }
+                
+                // Handle auto-stop settings
+                const autoStopEnabledElement = document.getElementById('autoStopEnabled');
+                if (autoStopEnabledElement && settings.autoStopEnabled !== undefined) {
+                    autoStopEnabledElement.value = settings.autoStopEnabled;
+                }
+                
+                const autoStopHoursElement = document.getElementById('autoStopHours');
+                if (autoStopHoursElement) {
+                    autoStopHoursElement.value = settings.autoStopHours || 4;
                 }
             } catch (error) {
                 console.error('Error updating form fields:', error);
@@ -256,6 +294,9 @@
                     let value;
                     if (element.tagName === 'SDPI-CHECKBOX') {
                         value = element.value === true || element.value === 'true';
+                    } else if (element.tagName === 'SDPI-SELECT' && settingName === 'autoStopHours') {
+                        // Parse auto-stop hours as float
+                        value = parseFloat(element.value) || 4;
                     } else {
                         value = element.value || '';
                     }
