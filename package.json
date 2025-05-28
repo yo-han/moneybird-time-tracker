@@ -1,5 +1,5 @@
 {
-  "version": "0.2.0",
+  "version": "0.3.1",
   "scripts": {
     "build": "rollup -c",
     "watch": "rollup -c -w --watch.onEnd=\"streamdeck restart com.johan-kuijt.moneybird-timer\"",
@@ -7,7 +7,9 @@
     "lint:fix": "eslint \"src/**/*.ts\" --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx,json}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,json}\"",
+    "bump-version": "node scripts/bump-version.js",
     "package": "node scripts/package-plugin.js",
+    "package:no-bump": "node scripts/package-plugin.js --no-bump",
     "release": "npm run lint && npm run build && npm run package"
   },
   "type": "module",

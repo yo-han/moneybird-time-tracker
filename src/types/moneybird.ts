@@ -12,6 +12,8 @@ export interface TimerSettings extends JsonObject {
   startTime?: string;
   timeEntryId?: string;
   displayTitle?: string;
+  autoStopEnabled?: boolean;
+  autoStopHours?: number;
   administrations?: Record<string, JsonValue>;
   projects?: Record<string, JsonValue>;
   contacts?: Record<string, JsonValue>;

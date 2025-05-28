@@ -14,6 +14,16 @@ async function packagePlugin() {
   try {
     console.log('🚀 Starting plugin packaging process...\n');
 
+    // Check if we should skip version bump
+    const skipBump = process.argv.includes('--no-bump');
+    
+    if (!skipBump) {
+      // Step 0: Bump version number
+      console.log('📝 Bumping version number...');
+      execSync('node scripts/bump-version.js', { stdio: 'inherit', cwd: projectRoot });
+      console.log('');
+    }
+
     // Step 1: Clean previous builds
     console.log('🧹 Cleaning previous builds...');
     const distPath = path.join(projectRoot, 'dist');
