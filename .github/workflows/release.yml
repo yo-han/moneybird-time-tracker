@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
@@ -36,16 +39,18 @@ jobs:
       
     - name: Get version from tag
       id: get_version
-      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      run: |
+        if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+          echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        else
+          echo "VERSION=dev-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+        fi
       
     - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
       with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ steps.get_version.outputs.VERSION }}
+        name: Release ${{ steps.get_version.outputs.VERSION }}
         body: |
           ## Moneybird Time Tracker ${{ steps.get_version.outputs.VERSION }}
           
@@ -54,17 +59,22 @@ jobs:
           2. Double-click to install
           3. Configure your Moneybird API token in the Stream Deck software
           
+          ### Features
+          - Start/stop time tracking with one button press
+          - Project selection
+          - Contact assignment
+          - User tracking
+          - Real-time timer display
+          - Billable/non-billable time entries
+          
           ### What's Changed
           - See commit history for changes
-        draft: false
-        prerelease: false
+        files: dist/com.johan-kuijt.moneybird-timer.streamDeckPlugin
+        fail_on_unmatched_files: true
         
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Upload artifact for manual workflow
+      if: github.event_name == 'workflow_dispatch'
+      uses: actions/upload-artifact@v4
       with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./dist/com.johan-kuijt.moneybird-timer.streamDeckPlugin
-        asset_name: com.johan-kuijt.moneybird-timer.streamDeckPlugin
-        asset_content_type: application/zip
+        name: moneybird-timer-plugin
+        path: dist/com.johan-kuijt.moneybird-timer.streamDeckPlugin
