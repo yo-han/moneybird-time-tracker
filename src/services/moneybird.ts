@@ -7,7 +7,10 @@ import {
   MoneybirdAdministration,
   MoneybirdUser,
   MoneybirdContact,
+  MoneybirdTimeEntry,
+  MoneybirdSalesInvoice,
 } from '../types/moneybird';
+import { format } from 'date-fns';
 
 export class MoneybirdService {
   private baseUrl = 'https://moneybird.com/api/v2';
@@ -222,6 +225,176 @@ export class MoneybirdService {
         data: error.response?.data,
       });
       throw error;
+    }
+  }
+
+  async getTimeEntriesForContact(
+    contactId: string,
+    startDate: Date,
+    endDate: Date
+  ): Promise<MoneybirdTimeEntry[]> {
+    try {
+      if (!this.administrationId) {
+        throw new Error('No administration ID provided');
+      }
+
+      const filter = `period:${format(startDate, 'yyyyMMdd')}..${format(endDate, 'yyyyMMdd')}`;
+
+      streamDeck.logger.debug(`Fetching time entries with filter: ${filter}`);
+
+      const response = await axios.get(
+        `${this.baseUrl}/${this.administrationId}/time_entries.json`,
+        {
+          headers: this.getHeaders(),
+          params: {
+            filter: filter,
+            per_page: 100,
+          },
+        }
+      );
+
+      // Filter for the specific contact and billable entries
+      const timeEntries = response.data.filter(
+        (entry: MoneybirdTimeEntry) =>
+          entry.contact_id === contactId && entry.billable === true && entry.ended_at !== null
+      );
+
+      streamDeck.logger.debug(
+        `Found ${timeEntries.length} billable time entries for contact ${contactId}`
+      );
+
+      return timeEntries;
+    } catch (error) {
+      return this.handleAxiosError(error as AxiosError);
+    }
+  }
+
+  async createInvoiceFromTimeEntries(
+    contactId: string,
+    timeEntries: MoneybirdTimeEntry[],
+    description: string,
+    workflowId?: string,
+    hourlyRate: number = 75
+  ): Promise<MoneybirdSalesInvoice> {
+    try {
+      if (!this.administrationId) {
+        throw new Error('No administration ID provided');
+      }
+
+      // Group time entries by project and description
+      const groupedEntries = this.groupTimeEntries(timeEntries, hourlyRate);
+
+      // Create invoice details from grouped entries
+      const details_attributes = groupedEntries.map((group, index) => ({
+        description: group.description,
+        price: group.totalAmount.toFixed(2),
+        amount: `${group.totalHours.toFixed(2)} uur`,
+        row_order: index,
+      }));
+
+      const invoiceData = {
+        sales_invoice: {
+          contact_id: contactId,
+          reference: description,
+          details_attributes: details_attributes,
+          workflow_id: workflowId,
+          prices_are_incl_tax: false,
+        },
+      };
+
+      streamDeck.logger.debug('Creating invoice:', invoiceData);
+
+      const response = await axios.post(
+        `${this.baseUrl}/${this.administrationId}/sales_invoices.json`,
+        invoiceData,
+        {
+          headers: this.getHeaders(),
+        }
+      );
+
+      // Link time entries to the invoice
+      const invoiceId = response.data.id;
+      await this.linkTimeEntriesToInvoice(timeEntries, invoiceId);
+
+      return response.data;
+    } catch (error) {
+      return this.handleAxiosError(error as AxiosError);
+    }
+  }
+
+  private groupTimeEntries(
+    timeEntries: MoneybirdTimeEntry[],
+    hourlyRate: number = 75
+  ): Array<{
+    description: string;
+    totalHours: number;
+    totalAmount: number;
+    entries: MoneybirdTimeEntry[];
+  }> {
+    const groups: Record<
+      string,
+      {
+        description: string;
+        totalHours: number;
+        totalAmount: number;
+        entries: MoneybirdTimeEntry[];
+      }
+    > = {};
+
+    timeEntries.forEach(entry => {
+      const key = entry.description || 'Werkzaamheden';
+
+      if (!groups[key]) {
+        groups[key] = {
+          description: key,
+          totalHours: 0,
+          totalAmount: 0,
+          entries: [],
+        };
+      }
+
+      const startTime = new Date(entry.started_at);
+      const endTime = new Date(entry.ended_at);
+      const durationMs = endTime.getTime() - startTime.getTime() - entry.paused_duration * 1000;
+      const hours = durationMs / (1000 * 60 * 60);
+
+      groups[key].totalHours += hours;
+      groups[key].entries.push(entry);
+    });
+
+    // Calculate amount based on hourly rate
+    Object.values(groups).forEach(group => {
+      group.totalAmount = group.totalHours * hourlyRate;
+    });
+
+    return Object.values(groups);
+  }
+
+  private async linkTimeEntriesToInvoice(
+    timeEntries: MoneybirdTimeEntry[],
+    invoiceId: string
+  ): Promise<void> {
+    try {
+      // Update each time entry with the invoice ID
+      const updatePromises = timeEntries.map(entry =>
+        axios.patch(
+          `${this.baseUrl}/${this.administrationId}/time_entries/${entry.id}.json`,
+          {
+            time_entry: {
+              sales_invoice_id: invoiceId,
+            },
+          },
+          {
+            headers: this.getHeaders(),
+          }
+        )
+      );
+
+      await Promise.all(updatePromises);
+      streamDeck.logger.debug(`Linked ${timeEntries.length} time entries to invoice ${invoiceId}`);
+    } catch (error) {
+      streamDeck.logger.error('Error linking time entries to invoice:', error);
+      // Don't throw here, the invoice is already created
     }
   }
 }
