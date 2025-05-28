@@ -1,6 +1,6 @@
 {
 	"Name": "Moneybird Timer",
-	"Version": "0.1.1.0",
+	"Version": "0.2.0.0",
 	"Author": "Johan Kuijt",
 	"Actions": [
 		{
@@ -27,7 +27,7 @@
 	"Category": "Moneybird Timer",
 	"CategoryIcon": "imgs/plugin/category-icon",
 	"CodePath": "bin/plugin.js",
-	"Description": "Moneybird hour registration timer",
+	"Description": "Track your time directly in Moneybird with a single button press. Features include project selection, contact assignment, user tracking, and real-time timer display.",
 	"Icon": "imgs/plugin/marketplace",
 	"SDKVersion": 2,
 	"Software": {
@@ -47,5 +47,6 @@
 		"Version": "20",
 		"Debug": "enabled"
 	},
-	"UUID": "com.johan-kuijt.moneybird-timer"
+	"UUID": "com.johan-kuijt.moneybird-timer",
+	"URL": "https://github.com/johan-kuijt/moneybird-time-tracker"
 }

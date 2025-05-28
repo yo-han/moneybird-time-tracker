@@ -6,6 +6,7 @@ import {
   MoneybirdProject,
   MoneybirdAdministration,
   MoneybirdUser,
+  MoneybirdContact,
 } from '../types/moneybird';
 
 export class MoneybirdService {
@@ -110,6 +111,28 @@ export class MoneybirdService {
     }
   }
 
+  async getContacts(): Promise<MoneybirdContact[]> {
+    try {
+      if (!this.administrationId) {
+        throw new Error('No administration ID provided');
+      }
+
+      streamDeck.logger.debug(`Fetching contacts for administration ${this.administrationId}`);
+      const response = await axios.get(`${this.baseUrl}/${this.administrationId}/contacts.json`, {
+        headers: this.getHeaders(),
+      });
+
+      return response.data.map((contact: any) => ({
+        id: contact.id,
+        company_name: contact.company_name || '',
+        firstname: contact.firstname || '',
+        lastname: contact.lastname || '',
+      }));
+    } catch (error) {
+      return this.handleAxiosError(error as AxiosError);
+    }
+  }
+
   private formatDate(date: Date): string {
     const pad = (num: number) => num.toString().padStart(2, '0');
 
@@ -140,6 +163,7 @@ export class MoneybirdService {
           started_at: this.formatDate(new Date()),
           user_id: settings.userId,
           project_id: settings.projectId,
+          contact_id: settings.contactId || null,
           description: settings.description || 'Time registration',
           billable,
         },

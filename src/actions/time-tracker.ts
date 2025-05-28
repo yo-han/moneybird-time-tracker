@@ -5,11 +5,16 @@ import streamDeck, {
   WillAppearEvent,
   SendToPluginEvent,
   WillDisappearEvent,
-  JsonValue,
   DidReceiveSettingsEvent,
 } from '@elgato/streamdeck';
 import { MoneybirdService } from '../services/moneybird';
-import { TimerSettings, projectToJson, administrationToJson, userToJson } from '../types/moneybird';
+import {
+  TimerSettings,
+  projectToJson,
+  administrationToJson,
+  userToJson,
+  contactToJson,
+} from '../types/moneybird';
 import { differenceInSeconds, differenceInMinutes, differenceInHours } from 'date-fns';
 import path from 'path';
 
@@ -65,25 +70,35 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     const { administrationId } = ev.payload;
     const currentSettings = await ev.action.getSettings();
 
+    streamDeck.logger.debug(
+      `handleAdministrationChange called with administrationId: ${administrationId}`
+    );
+
     if (!currentSettings.apiKey || !administrationId) {
+      streamDeck.logger.debug('Missing apiKey or administrationId, aborting');
       return;
     }
 
     try {
       const moneybirdService = new MoneybirdService(currentSettings.apiKey, administrationId);
 
-      const [rawProjects, rawUsers] = await Promise.all([
+      streamDeck.logger.debug('Fetching projects, users, and contacts...');
+      const [rawProjects, rawUsers, rawContacts] = await Promise.all([
         moneybirdService.getProjects(),
         moneybirdService.getUsers(administrationId),
+        moneybirdService.getContacts(),
       ]);
 
       const projects = Object.fromEntries(
         rawProjects.map(project => [project.id, projectToJson(project)])
       );
       const users = Object.fromEntries(rawUsers.map(user => [user.id, userToJson(user)]));
+      const contacts = Object.fromEntries(
+        rawContacts.map(contact => [contact.id, contactToJson(contact)])
+      );
 
       streamDeck.logger.debug(
-        `Fetched ${rawProjects.length} projects and ${rawUsers.length} users for administration ${administrationId}`
+        `Fetched ${rawProjects.length} projects, ${rawUsers.length} users and ${rawContacts.length} contacts for administration ${administrationId}`
       );
 
       const newSettings: TimerSettings = {
@@ -91,11 +106,14 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         administrationId,
         projects,
         users,
+        contacts,
         projectId: '',
         userId: '',
+        contactId: '',
       };
 
       await ev.action.setSettings(newSettings);
+      streamDeck.logger.debug('Settings saved with new data');
     } catch (fetchError) {
       streamDeck.logger.error('Error fetching Moneybird data:', {
         message: (fetchError as Error).message,
@@ -106,7 +124,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   }
 
   private async handleGlobalSettings(ev: SendToPluginEvent<any, TimerSettings>): Promise<void> {
-    const { apiKey, administrationId } = ev.payload;
+    const { apiKey } = ev.payload;
     const currentSettings = await ev.action.getSettings();
 
     if (!apiKey) {
@@ -135,10 +153,6 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       };
 
       await ev.action.setSettings(newSettings);
-
-      if (administrationId) {
-        await this.handleAdministrationChange(ev);
-      }
     } catch (fetchError) {
       streamDeck.logger.error('Error fetching Moneybird data:', {
         message: (fetchError as Error).message,
@@ -325,7 +339,6 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       const totalHours = differenceInHours(now, startDate);
 
       let displayTime: string;
-      let imagePath: string;
 
       if (totalMinutes < 1) {
         displayTime = `${totalSeconds}s`;
@@ -335,7 +348,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         displayTime = `${totalHours}h`;
       }
 
-      imagePath = this.getImagePath('active');
+      const imagePath = this.getImagePath('active');
 
       // streamDeck.logger.debug(`Setting title to: ⏱️ ${displayTime}`);
       // streamDeck.logger.debug(`Setting image to: ${imagePath}`);

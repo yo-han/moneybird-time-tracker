@@ -43,6 +43,13 @@
         <div id="projectError" class="error hidden"></div>
     </sdpi-item>
 
+    <sdpi-item label="Contact">
+        <sdpi-select id="contactId" setting="contactId">
+            <option value="">Select a contact (optional)</option>
+        </sdpi-select>
+        <div id="contactError" class="error hidden"></div>
+    </sdpi-item>
+
     <sdpi-item label="User">
         <sdpi-select id="userId" setting="userId">
             <option value="">Select a user</option>
@@ -65,7 +72,6 @@
         const { streamDeckClient } = SDPIComponents;
         let isConnected = false;
         let currentSettings = {};
-        let currentInstanceId = null;
         let isLoading = false;
 
         function setLoading(loading) {
@@ -78,44 +84,6 @@
                     select.classList.remove('loading');
                 }
             });
-        }
-
-        function getStorageKeyForInstance(instanceId) {
-            return `moneybird_timer_settings_${instanceId}`;
-        }
-
-        function loadPersistedSettings(instanceId) {
-            if (!instanceId) return {};
-
-            try {
-                const key = getStorageKeyForInstance(instanceId);
-                const persistedSettings = localStorage.getItem(key);
-                
-                return persistedSettings ? JSON.parse(persistedSettings) : {};
-            } catch (error) {
-                return {};
-            }
-        }
-
-        function savePersistedSettings(settings, instanceId) {
-            if (!instanceId) return;
-
-            try {
-                const key = getStorageKeyForInstance(instanceId);
-                const existingSettings = loadPersistedSettings(instanceId);
-                const settingsToSave = {
-                    ...existingSettings,
-                    displayTitle: settings.displayTitle || existingSettings.displayTitle,
-                    administrationId: settings.administrationId || existingSettings.administrationId,
-                    projectId: settings.projectId || existingSettings.projectId,
-                    userId: settings.userId || existingSettings.userId,
-                    description: settings.description || existingSettings.description,
-                };
-
-                localStorage.setItem(key, JSON.stringify(settingsToSave));
-            } catch (error) {
-                // Silently fail
-            }
         }
 
         function showError(elementId, message) {
@@ -135,7 +103,7 @@
 
         function updateFormFields(settings = {}) {
             try {
-                const relevantKeys = ['apiKey', 'displayTitle', 'administrationId', 'projectId', 'userId', 'description'];
+                const relevantKeys = ['apiKey', 'displayTitle', 'administrationId', 'projectId', 'contactId', 'userId', 'description'];
                 
                 relevantKeys.forEach(key => {
                     const value = settings[key];
@@ -143,7 +111,6 @@
                         try {
                             const element = document.getElementById(key);
                             if (element) {
-                                
                                 element.value = value?.toString() || '';
                                 hideError(key);
                             }
@@ -152,8 +119,14 @@
                         }
                     }
                 });
+                
+                // Handle billable checkbox separately
+                const billableElement = document.getElementById('billable');
+                if (billableElement && settings.billable !== undefined) {
+                    billableElement.value = settings.billable;
+                }
             } catch (error) {
-                // Silently fail
+                console.error('Error updating form fields:', error);
             }
         }
 
@@ -166,20 +139,44 @@
                 
                 if (Array.isArray(items)) {
                     items.forEach(item => {
-                        if (item?.[valueKey] && item?.[nameKey]) {
-                            options.push({
-                                value: item[valueKey],
-                                text: item[nameKey]
-                            });
+                        if (item?.[valueKey]) {
+                            let displayName = '';
+                            if (elementId === 'contactId') {
+                                // Special handling for contacts
+                                displayName = item.company_name || 
+                                            `${item.firstname || ''} ${item.lastname || ''}`.trim() || 
+                                            'Unnamed Contact';
+                            } else {
+                                displayName = item[nameKey] || '';
+                            }
+                            
+                            if (displayName) {
+                                options.push({
+                                    value: item[valueKey],
+                                    text: displayName
+                                });
+                            }
                         }
                     });
                 } else if (typeof items === 'object') {
                     Object.entries(items).forEach(([key, item]) => {
-                        if (item?.[valueKey] && item?.[nameKey]) {
-                            options.push({
-                                value: item[valueKey],
-                                text: item[nameKey]
-                            });
+                        if (item?.[valueKey]) {
+                            let displayName = '';
+                            if (elementId === 'contactId') {
+                                // Special handling for contacts
+                                displayName = item.company_name || 
+                                            `${item.firstname || ''} ${item.lastname || ''}`.trim() || 
+                                            'Unnamed Contact';
+                            } else {
+                                displayName = item[nameKey] || '';
+                            }
+                            
+                            if (displayName) {
+                                options.push({
+                                    value: item[valueKey],
+                                    text: displayName
+                                });
+                            }
                         }
                     });
                 }
@@ -190,6 +187,7 @@
 
                 select.innerHTML = optionsHtml;
 
+                // Restore saved value if exists
                 if (currentSettings[select.getAttribute('setting')]) {
                     select.value = currentSettings[select.getAttribute('setting')];
                 }
@@ -200,64 +198,53 @@
             }
         }
 
-        async function loadResources(changedField = '') {
-            if (isLoading) return;
+        async function loadAdministrations() {
+            const apiKey = document.getElementById('apiKey')?.value;
+            if (!apiKey) return;
 
             setLoading(true);
             try {
-                const apiKey = document.getElementById('apiKey')?.value;
-                const administrationId = document.getElementById('administrationId')?.value;
-
-                if (!apiKey) {
-                    setLoading(false);
-                    return;
-                }
-
-                hideError('apiKey');
-                hideError('administrationId');
-
-                if (changedField === 'administrationId') {
-                    if (administrationId) {
-                        // Reset project and user dropdowns immediately to show loading state
-                        await Promise.all([
-                            updateDropdown('projectId', {}, 'id', 'name', 'Loading projects...'),
-                            updateDropdown('userId', {}, 'id', 'name', 'Loading users...')
-                        ]);
-                        
-                        await streamDeckClient.send('sendToPlugin', {
-                            event: 'administrationSelected',
-                            administrationId
-                        });
-                    } else {
-                        // Clear dropdowns if no administration is selected
-                        await Promise.all([
-                            updateDropdown('projectId', {}, 'id', 'name', 'Select a project'),
-                            updateDropdown('userId', {}, 'id', 'name', 'Select a user')
-                        ]);
-                    }
-                    setLoading(false);
-                    return;
-                }
-
-                const payload = { 
-                    event: 'setGlobalSettings', 
-                    apiKey 
-                };
-
-                if (administrationId) {
-                    payload.administrationId = administrationId;
-                }
-
-                await streamDeckClient.send('sendToPlugin', payload);
-                setLoading(false);
+                await streamDeckClient.send('sendToPlugin', {
+                    event: 'setGlobalSettings',
+                    apiKey: apiKey
+                });
             } catch (error) {
+                showError('apiKey', 'Error loading administrations');
+            } finally {
                 setLoading(false);
-                showError('apiKey', 'Error loading resources');
+            }
+        }
+
+        async function loadAdministrationData(administrationId) {
+            if (!administrationId) {
+                // Clear dropdowns
+                await updateDropdown('projectId', {}, 'id', 'name', 'Select a project');
+                await updateDropdown('contactId', {}, 'id', 'company_name', 'Select a contact (optional)');
+                await updateDropdown('userId', {}, 'id', 'name', 'Select a user');
+                return;
+            }
+
+            setLoading(true);
+            try {
+                // Set loading state for dropdowns
+                await updateDropdown('projectId', {}, 'id', 'name', 'Loading projects...');
+                await updateDropdown('contactId', {}, 'id', 'company_name', 'Loading contacts...');
+                await updateDropdown('userId', {}, 'id', 'name', 'Loading users...');
+                
+                // Request data from plugin
+                await streamDeckClient.send('sendToPlugin', {
+                    event: 'administrationSelected',
+                    administrationId: administrationId
+                });
+            } catch (error) {
+                showError('administrationId', 'Error loading administration data');
+            } finally {
+                setLoading(false);
             }
         }
 
         async function saveSettings() {
-            if (!isConnected || !currentInstanceId) return;
+            if (!isConnected) return;
 
             const settings = {};
             const elements = document.querySelectorAll('[setting]');
@@ -270,8 +257,7 @@
                     if (element.tagName === 'SDPI-CHECKBOX') {
                         value = element.value === true || element.value === 'true';
                     } else {
-                      console.log('ELSE', element.value, settingName);
-                        value = element.value || currentSettings[settingName];
+                        value = element.value || '';
                     }
                 
                     settings[settingName] = value;
@@ -279,80 +265,124 @@
             });
 
             await streamDeckClient.setSettings(settings);
-            savePersistedSettings(settings, currentInstanceId);
             currentSettings = {...currentSettings, ...settings};
         }
 
         function initializeEventListeners() {
             try {
+                // Listen for all setting changes
                 const settingElements = document.querySelectorAll('[setting]');
                 settingElements.forEach(element => {
+                    // Use both input and change events for better compatibility
                     element.addEventListener('input', saveSettings);
                     element.addEventListener('change', saveSettings);
                 });
 
+                // API Key input - load administrations
                 const apiKeyElement = document.getElementById('apiKey');
-                const adminElement = document.getElementById('administrationId');
-
                 if (apiKeyElement) {
-                    apiKeyElement.addEventListener('input', async (e) => {
-                        const value = e.target.value?.trim();
-                        if (value) {
-                            await loadResources('apiKey');
-                        }
+                    let apiKeyTimeout;
+                    apiKeyElement.addEventListener('input', (e) => {
+                        clearTimeout(apiKeyTimeout);
+                        apiKeyTimeout = setTimeout(() => {
+                            if (e.target.value?.trim()) {
+                                loadAdministrations();
+                            }
+                        }, 500); // Debounce API calls
                     });
                 }
+
+                // Administration select - load projects/contacts/users
+                const adminElement = document.getElementById('administrationId');
                 if (adminElement) {
-                    adminElement.addEventListener('input', async (e) => {
-                        const value = e.target.value?.trim();
-                        if (value) {
-                            await loadResources('administrationId');
-                        } else {
-                            // Reset project and user dropdowns when no administration is selected
-                            updateDropdown('projectId', {});
-                            updateDropdown('userId', {});
+                    let lastValue = adminElement.value;
+                    
+                    // Function to handle administration changes
+                    const handleAdminChange = (newValue) => {
+                        if (newValue !== lastValue) {
+                            console.log('Administration changed from', lastValue, 'to:', newValue);
+                            lastValue = newValue;
+                            loadAdministrationData(newValue);
                         }
+                    };
+                    
+                    // Listen to standard events
+                    adminElement.addEventListener('change', (e) => handleAdminChange(e.target.value));
+                    adminElement.addEventListener('input', (e) => handleAdminChange(e.target.value));
+                    
+                    // Also use MutationObserver to catch programmatic changes
+                    const observer = new MutationObserver((mutations) => {
+                        mutations.forEach((mutation) => {
+                            if (mutation.type === 'attributes' && mutation.attributeName === 'value') {
+                                handleAdminChange(adminElement.value);
+                            }
+                        });
                     });
+                    
+                    // Start observing
+                    observer.observe(adminElement, {
+                        attributes: true,
+                        attributeFilter: ['value']
+                    });
+                    
+                    // Also poll for changes as a fallback (sdpi-select might not trigger all events)
+                    setInterval(() => {
+                        if (adminElement.value !== lastValue) {
+                            handleAdminChange(adminElement.value);
+                        }
+                    }, 250);
                 }
             } catch (error) {
-                // Silently fail
+                console.error('Error initializing event listeners:', error);
             }
         }
 
         streamDeckClient.didReceiveSettings.subscribe(async event => {
             try {
-                setLoading(true);
                 const settings = event?.payload?.settings || {};
+                console.log('Received settings:', settings);
                 
-                const persistedSettings = loadPersistedSettings(currentInstanceId);
-                const mergedSettings = {...settings, ...persistedSettings};
+                currentSettings = settings;
                 
-                currentSettings = mergedSettings;
+                // Update form fields
+                updateFormFields(settings);
                 
-                updateFormFields(mergedSettings);
-                
+                // Update administrations dropdown if we have them
                 if (settings.administrations && typeof settings.administrations === 'object') {
                     await updateDropdown('administrationId', settings.administrations);
+                    
+                    // Force trigger change if we have a selected administration
+                    if (settings.administrationId) {
+                        const adminElement = document.getElementById('administrationId');
+                        if (adminElement) {
+                            // Set the value again to ensure it's selected
+                            adminElement.value = settings.administrationId;
+                            
+                            // If this is a new administration selection (no projects loaded yet), load the data
+                            if (!settings.projects || Object.keys(settings.projects).length === 0) {
+                                console.log('Administration set but no projects, loading data...');
+                                setTimeout(() => {
+                                    loadAdministrationData(settings.administrationId);
+                                }, 200);
+                            }
+                        }
+                    }
                 }
 
-                // If we have a selected administration and received new projects/users
-                const selectedAdminId = document.getElementById('administrationId')?.value;
-                if (selectedAdminId) {
-                    // Update projects if we have them
-                    if (settings.projects && typeof settings.projects === 'object') {
-                        await updateDropdown('projectId', settings.projects);
-                    }
-
-                    // Update users if we have them
-                    if (settings.users && typeof settings.users === 'object') {
-                        await updateDropdown('userId', settings.users);
-                    }
+                // Update other dropdowns if we have the data
+                if (settings.projects && typeof settings.projects === 'object') {
+                    await updateDropdown('projectId', settings.projects);
                 }
-                
-                setLoading(false);
+
+                if (settings.contacts && typeof settings.contacts === 'object') {
+                    await updateDropdown('contactId', settings.contacts, 'id', 'company_name', 'Select a contact (optional)');
+                }
+
+                if (settings.users && typeof settings.users === 'object') {
+                    await updateDropdown('userId', settings.users);
+                }
             } catch (error) {
                 console.error('Error in didReceiveSettings:', error);
-                setLoading(false);
             }
         });
 
@@ -360,29 +390,13 @@
             try {
                 await streamDeckClient.connect(port, uuid, event, JSON.parse(info), JSON.parse(actionInfo));
                 
-                const parsedActionInfo = JSON.parse(actionInfo);
-                currentInstanceId = parsedActionInfo.context;
-                
                 isConnected = true;
-                
-                const persistedSettings = loadPersistedSettings(currentInstanceId);
-                
-                if (Object.keys(persistedSettings).length > 0) {
-                    updateFormFields(persistedSettings);
-                }
                 
                 initializeEventListeners();
                 
-                const apiKey = document.getElementById('apiKey')?.value?.trim();
-                
-                if (apiKey) {
-                    // Slight delay before loading resources to prevent too many requests
-                    setTimeout(async () => {
-                        await loadResources('apiKey');
-                    }, 100);
-                }
+                console.log('Connected to Stream Deck');
             } catch (error) {
-                // Silently fail
+                console.error('Error connecting to Stream Deck:', error);
             }
         };
     })();
