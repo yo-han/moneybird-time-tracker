@@ -1,6 +1,50 @@
-# Moneybird Time Tracker - Update v0.4.0
+# Moneybird Time Tracker - Update v0.4.1
 
-## Nieuwe Functionaliteiten
+## Verbeterde Periode Selectie 🎯
+
+### Nieuwe Manier van Periode Kiezen
+In plaats van één dropdown met alle opties, heb je nu **twee aparte dropdowns**:
+
+1. **Period Type**: 
+   - Month (maand)
+   - Quarter (kwartaal)
+   - Year (jaar)
+
+2. **Period Range**: 
+   - This (huidige)
+   - Last (vorige)
+
+Dit geeft je meer flexibiliteit en maakt het makkelijker om snel de juiste periode te selecteren.
+
+### Slimmere Lange Druk 🔄
+De lange druk functie is nu veel slimmer:
+- **Houd 0.5 seconden vast**: Wisselt alleen tussen "This" en "Last"
+- Behoudt je geselecteerde periode type (month/quarter/year)
+- Perfect voor snel switchen tussen huidige en vorige periode!
+
+**Voorbeeld**: 
+- Je hebt "Month" + "This" geselecteerd
+- Lange druk → wordt "Month" + "Last"
+- Nog een lange druk → terug naar "Month" + "This"
+
+## Verbeterde Invoice Summary 📊
+
+De Invoice Summary knop is nu veel flexibeler:
+
+### Display Title Prioriteit
+- **Met display title**: Toont altijd je eigen titel in plaats van de periode naam
+- **Zonder display title**: Toont de periode naam (This Month, Last Quarter, etc.)
+
+### Slimme Prijs Weergave
+- **Zonder uurtarief**: Toont alleen de uren (bijv. "12.5h")
+- **Met uurtarief**: Toont uren én totaalbedrag (bijv. "12.5h = €938")
+
+**Voorbeelden**:
+- Display title "Klant A" + geen uurtarief → "Klant A\n25.5h"
+- Display title "Project X" + €80/uur → "Project X\n25.5h = €2040"
+- Geen display title + €75/uur → "This Month\n12.5h = €938"
+
+## Alle Functionaliteiten (v0.4.x)
 
 ### 1. Configureerbaar Uurtarief ⚙️
 - **Wat**: Je kunt nu het uurtarief per knop instellen
@@ -19,7 +63,14 @@ Je kunt nu kiezen uit de volgende periodes voor facturatie:
 
 De geselecteerde periode wordt direct op de knop weergegeven onder de titel.
 
-### 3. Invoice Summary Preview 👁️
+### 3. Periode Wisselen met Lange Druk 🔄
+**NIEUW**: Houd de Invoice Creator knop 0.5 seconden ingedrukt om door de periodes te cyclen zonder naar de instellingen te gaan!
+- **Korte druk**: Maakt factuur voor de huidige periode
+- **Lange druk** (0.5 sec): Wisselt naar de volgende periode
+- De knop toont kort een groen vinkje bij het wisselen
+- Perfect voor als je vergeten bent de vorige maand te factureren!
+
+### 4. Invoice Summary Preview 👁️
 Een nieuwe knop type die een live preview toont van:
 - Geselecteerde periode
 - Totaal aantal uren

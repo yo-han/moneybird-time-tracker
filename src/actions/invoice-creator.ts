@@ -1,6 +1,7 @@
 import streamDeck, {
   action,
   KeyDownEvent,
+  KeyUpEvent,
   SingletonAction,
   WillAppearEvent,
   SendToPluginEvent,
@@ -24,7 +25,32 @@ import path from 'path';
 export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
   private longPressTimer?: NodeJS.Timeout;
   private isLongPress = false;
-  private previewUpdateInterval?: NodeJS.Timeout;
+  private periodCycleTimeout?: NodeJS.Timeout;
+
+  private periods = [
+    { key: 'current_month', label: 'This Month' },
+    { key: 'last_month', label: 'Last Month' },
+    { key: 'current_quarter', label: 'This Quarter' },
+    { key: 'last_quarter', label: 'Last Quarter' },
+    { key: 'current_year', label: 'This Year' },
+    { key: 'last_year', label: 'Last Year' },
+  ];
+
+  private getPeriodKey(settings: InvoiceSettings): string {
+    // Use new format if available
+    if (settings.periodType && settings.periodRange) {
+      const range = settings.periodRange === 'last' ? 'last' : 'current';
+      return `${range}_${settings.periodType}`;
+    }
+    // Fall back to old format
+    return settings.period || 'current_month';
+  }
+
+  private getPeriodLabel(settings: InvoiceSettings): string {
+    const periodKey = this.getPeriodKey(settings);
+    const period = this.periods.find(p => p.key === periodKey);
+    return period ? period.label : 'This Month';
+  }
 
   private getImagePath(type: 'default' | 'success' | 'error'): string {
     const baseDir = 'imgs/actions/invoice';
@@ -37,10 +63,19 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       const settings = ev.payload.settings;
       const instanceId = ev.action.id;
 
-      if (settings.displayTitle !== undefined || settings.period !== undefined) {
+      streamDeck.logger.debug(
+        `[InvoiceCreator] Settings received for instance ${instanceId}:`,
+        settings
+      );
+
+      if (
+        settings.displayTitle !== undefined ||
+        settings.periodType !== undefined ||
+        settings.periodRange !== undefined
+      ) {
         // Update title with period info if configured
         if (settings.apiKey && settings.administrationId && settings.contactId) {
-          const periodLabel = this.getPeriodLabel(settings.period || 'current_month');
+          const periodLabel = this.getPeriodLabel(settings);
           const displayTitle = settings.displayTitle || 'Invoice';
           await ev.action.setTitle(`${displayTitle}\n${periodLabel}`);
         } else {
@@ -49,7 +84,10 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
         }
       }
 
-      streamDeck.logger.debug(`Invoice settings updated for instance ${instanceId}:`, settings);
+      streamDeck.logger.debug(
+        `[InvoiceCreator] Settings updated for instance ${instanceId}:`,
+        settings
+      );
     } catch (error) {
       streamDeck.logger.error('Error in onDidReceiveSettings:', error);
     }
@@ -178,27 +216,12 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
 
     // Show period in title if configured
     if (settings.apiKey && settings.administrationId && settings.contactId) {
-      const periodLabel = this.getPeriodLabel(settings.period || 'current_month');
+      const periodLabel = this.getPeriodLabel(settings);
       const displayTitle = settings.displayTitle || 'Invoice';
       await ev.action.setTitle(`${displayTitle}\n${periodLabel}`);
     } else {
       const title = settings.displayTitle ? settings.displayTitle : 'Invoice';
       await ev.action.setTitle(String(title));
-    }
-  }
-
-  private getPeriodLabel(period: string): string {
-    switch (period) {
-      case 'last_month':
-        return 'Last Month';
-      case 'current_quarter':
-        return 'This Quarter';
-      case 'last_quarter':
-        return 'Last Quarter';
-      case 'current_year':
-        return 'This Year';
-      default:
-        return 'This Month';
     }
   }
 
@@ -218,6 +241,72 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       return;
     }
 
+    // Set up long press detection
+    this.isLongPress = false;
+    this.longPressTimer = setTimeout(() => {
+      this.isLongPress = true;
+      this.cyclePeriod(ev);
+    }, 500); // 500ms = long press
+  }
+
+  override async onKeyUp(ev: KeyUpEvent<InvoiceSettings>): Promise<void> {
+    // Clear the long press timer
+    if (this.longPressTimer) {
+      clearTimeout(this.longPressTimer);
+      this.longPressTimer = undefined;
+    }
+
+    // If it was a long press, we already handled it
+    if (this.isLongPress) {
+      this.isLongPress = false;
+      return;
+    }
+
+    // Normal press - create invoice
+    await this.createInvoice(ev);
+  }
+
+  private async cyclePeriod(
+    ev: KeyDownEvent<InvoiceSettings> | KeyUpEvent<InvoiceSettings>
+  ): Promise<void> {
+    const settings = ev.payload.settings;
+
+    // Toggle between current and last
+    const currentRange = settings.periodRange || 'current';
+    const newRange = currentRange === 'current' ? 'last' : 'current';
+
+    // Update settings - only for this action instance
+    const newSettings: InvoiceSettings = {
+      ...settings,
+      periodRange: newRange,
+    };
+
+    // Use action-specific setSettings
+    await ev.action.setSettings(newSettings);
+
+    // Update display
+    const displayTitle = settings.displayTitle || 'Invoice';
+    const periodLabel = this.getPeriodLabel(newSettings);
+    await ev.action.setTitle(`${displayTitle}\n${periodLabel}`);
+
+    // Show temporary feedback
+    await ev.action.setImage(this.getImagePath('success'));
+
+    // Clear any existing timeout
+    if (this.periodCycleTimeout) {
+      clearTimeout(this.periodCycleTimeout);
+    }
+
+    // Reset image after a short delay
+    this.periodCycleTimeout = setTimeout(async () => {
+      await ev.action.setImage(this.getImagePath('default'));
+    }, 1000);
+  }
+
+  private async createInvoice(ev: KeyUpEvent<InvoiceSettings>): Promise<void> {
+    const settings = ev.payload.settings;
+    const instanceId = ev.action.id;
+
     const moneybirdService = new MoneybirdService(settings.apiKey, settings.administrationId);
 
     try {
@@ -230,7 +319,9 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       let endDate: Date;
       let periodDescription: string;
 
-      switch (settings.period) {
+      const periodKey = this.getPeriodKey(settings);
+
+      switch (periodKey) {
         case 'last_month': {
           const lastMonth = subMonths(now, 1);
           startDate = startOfMonth(lastMonth);
@@ -257,6 +348,13 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
           periodDescription = format(now, 'yyyy');
           break;
         }
+        case 'last_year': {
+          const lastYear = subMonths(now, 12);
+          startDate = startOfYear(lastYear);
+          endDate = endOfYear(lastYear);
+          periodDescription = format(lastYear, 'yyyy');
+          break;
+        }
         default: // current_month
           startDate = startOfMonth(now);
           endDate = endOfMonth(now);
@@ -279,7 +377,8 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
         // Reset after 3 seconds
         setTimeout(async () => {
           const title = settings.displayTitle || 'Invoice';
-          await ev.action.setTitle(String(title));
+          const periodLabel = this.getPeriodLabel(settings);
+          await ev.action.setTitle(`${title}\n${periodLabel}`);
           await ev.action.setImage(this.getImagePath('default'));
         }, 3000);
 
@@ -287,7 +386,8 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       }
 
       // Create invoice
-      const hourlyRate = parseFloat(String(settings.hourlyRate)) || 75;
+      const hourlyRateString = String(settings.hourlyRate).replace(',', '.');
+      const hourlyRate = parseFloat(hourlyRateString) || 75;
       const invoice = await moneybirdService.createInvoiceFromTimeEntries(
         settings.contactId,
         timeEntries,
@@ -305,7 +405,8 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       // Reset after 3 seconds
       setTimeout(async () => {
         const title = settings.displayTitle || 'Invoice';
-        await ev.action.setTitle(String(title));
+        const periodLabel = this.getPeriodLabel(settings);
+        await ev.action.setTitle(`${title}\n${periodLabel}`);
         await ev.action.setImage(this.getImagePath('default'));
       }, 3000);
     } catch (error: any) {
@@ -317,7 +418,8 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       // Reset after 3 seconds
       setTimeout(async () => {
         const title = settings.displayTitle || 'Invoice';
-        await ev.action.setTitle(String(title));
+        const periodLabel = this.getPeriodLabel(settings);
+        await ev.action.setTitle(`${title}\n${periodLabel}`);
         await ev.action.setImage(this.getImagePath('default'));
       }, 3000);
     }

@@ -282,12 +282,12 @@ export class MoneybirdService {
       }
 
       // Group time entries by project and description
-      const groupedEntries = this.groupTimeEntries(timeEntries, hourlyRate);
+      const groupedEntries = this.groupTimeEntries(timeEntries);
 
       // Create invoice details from grouped entries
       const details_attributes = groupedEntries.map((group, index) => ({
         description: group.description,
-        price: group.totalAmount.toFixed(2),
+        price: hourlyRate.toFixed(2),
         amount: `${group.totalHours.toFixed(2)} uur`,
         row_order: index,
       }));
@@ -322,13 +322,9 @@ export class MoneybirdService {
     }
   }
 
-  private groupTimeEntries(
-    timeEntries: MoneybirdTimeEntry[],
-    hourlyRate: number = 75
-  ): Array<{
+  private groupTimeEntries(timeEntries: MoneybirdTimeEntry[]): Array<{
     description: string;
     totalHours: number;
-    totalAmount: number;
     entries: MoneybirdTimeEntry[];
   }> {
     const groups: Record<
@@ -336,7 +332,6 @@ export class MoneybirdService {
       {
         description: string;
         totalHours: number;
-        totalAmount: number;
         entries: MoneybirdTimeEntry[];
       }
     > = {};
@@ -348,7 +343,6 @@ export class MoneybirdService {
         groups[key] = {
           description: key,
           totalHours: 0,
-          totalAmount: 0,
           entries: [],
         };
       }
@@ -360,11 +354,6 @@ export class MoneybirdService {
 
       groups[key].totalHours += hours;
       groups[key].entries.push(entry);
-    });
-
-    // Calculate amount based on hourly rate
-    Object.values(groups).forEach(group => {
-      group.totalAmount = group.totalHours * hourlyRate;
     });
 
     return Object.values(groups);

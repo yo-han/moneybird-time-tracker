@@ -7,7 +7,7 @@ import streamDeck, {
   DidReceiveSettingsEvent,
 } from '@elgato/streamdeck';
 import { MoneybirdService } from '../services/moneybird';
-import { InvoiceSettings } from '../types/moneybird';
+import { InvoiceSettings, administrationToJson, contactToJson } from '../types/moneybird';
 import {
   startOfMonth,
   endOfMonth,
@@ -30,10 +30,25 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
     return path.join(baseDir, imageName);
   }
 
-  private getPeriodDates(period: string): { start: Date; end: Date; description: string } {
-    const now = new Date();
+  private getPeriodKey(settings: InvoiceSettings): string {
+    // Use new format if available
+    if (settings.periodType && settings.periodRange) {
+      const range = settings.periodRange === 'last' ? 'last' : 'current';
+      return `${range}_${settings.periodType}`;
+    }
+    // Fall back to old format
+    return settings.period || 'current_month';
+  }
 
-    switch (period) {
+  private getPeriodDates(settings: InvoiceSettings): {
+    start: Date;
+    end: Date;
+    description: string;
+  } {
+    const now = new Date();
+    const periodKey = this.getPeriodKey(settings);
+
+    switch (periodKey) {
       case 'last_month': {
         const lastMonth = subMonths(now, 1);
         return {
@@ -64,6 +79,14 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
           description: format(now, 'yyyy'),
         };
       }
+      case 'last_year': {
+        const lastYear = subMonths(now, 12);
+        return {
+          start: startOfYear(lastYear),
+          end: endOfYear(lastYear),
+          description: format(lastYear, 'yyyy'),
+        };
+      }
       default: // current_month
         return {
           start: startOfMonth(now),
@@ -72,8 +95,9 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
         };
     }
   }
-  private getPeriodLabel(period: string): string {
-    switch (period) {
+  private getPeriodLabel(settings: InvoiceSettings): string {
+    const periodKey = this.getPeriodKey(settings);
+    switch (periodKey) {
       case 'last_month':
         return 'Last Month';
       case 'current_quarter':
@@ -82,6 +106,8 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
         return 'Last Quarter';
       case 'current_year':
         return 'This Year';
+      case 'last_year':
+        return 'Last Year';
       default:
         return 'This Month';
     }
@@ -93,14 +119,14 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
     const settings = ev.payload.settings;
 
     if (!settings.apiKey || !settings.administrationId || !settings.contactId) {
-      await ev.action.setTitle('Not configured');
+      const displayTitle = settings.displayTitle || 'Not configured';
+      await ev.action.setTitle(displayTitle);
       await ev.action.setImage(this.getImagePath('default'));
       return;
     }
 
     const moneybirdService = new MoneybirdService(settings.apiKey, settings.administrationId);
-    const period = settings.period || 'current_month';
-    const { start, end } = this.getPeriodDates(period);
+    const { start, end } = this.getPeriodDates(settings);
 
     try {
       // Fetch time entries
@@ -111,8 +137,8 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
       );
 
       if (timeEntries.length === 0) {
-        const periodLabel = this.getPeriodLabel(period);
-        await ev.action.setTitle(`${periodLabel}\nNo hours`);
+        const displayTitle = settings.displayTitle || this.getPeriodLabel(settings);
+        await ev.action.setTitle(`${displayTitle}\nNo hours`);
         await ev.action.setImage(this.getImagePath('default'));
         return;
       }
@@ -126,19 +152,25 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
         totalHours += durationMs / (1000 * 60 * 60);
       });
 
-      const hourlyRate = parseFloat(String(settings.hourlyRate)) || 75;
+      const hourlyRateString = String(settings.hourlyRate).replace(',', '.');
+      const hourlyRate = parseFloat(hourlyRateString) || 75;
       const totalAmount = totalHours * hourlyRate;
 
-      // Update display
-      const periodLabel = this.getPeriodLabel(period);
-      await ev.action.setTitle(
-        `${periodLabel}\n${totalHours.toFixed(1)}h = €${totalAmount.toFixed(0)}`
-      );
+      // Update display based on settings
+      const displayTitle = settings.displayTitle || this.getPeriodLabel(settings);
+      let displayText = `${displayTitle}\n${totalHours.toFixed(1)}h`;
+
+      // Add price if hourly rate is configured
+      if (settings.hourlyRate && settings.hourlyRate !== '') {
+        displayText += ` = €${totalAmount.toFixed(0)}`;
+      }
+
+      await ev.action.setTitle(displayText);
       await ev.action.setImage(this.getImagePath('preview'));
     } catch (error) {
       streamDeck.logger.error('Error fetching summary data:', error);
-      const periodLabel = this.getPeriodLabel(period);
-      await ev.action.setTitle(`${periodLabel}\nError`);
+      const displayTitle = settings.displayTitle || this.getPeriodLabel(settings);
+      await ev.action.setTitle(`${displayTitle}\nError`);
       await ev.action.setImage(this.getImagePath('error'));
     }
   }
@@ -165,16 +197,120 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
   }
 
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<InvoiceSettings>): Promise<void> {
+    streamDeck.logger.debug(`[InvoiceSummary] Settings received:`, ev.payload.settings);
     await this.updateSummary(ev);
   }
 
   override async onSendToPlugin(ev: SendToPluginEvent<any, InvoiceSettings>): Promise<void> {
-    // Handle same events as invoice creator for consistency
-    if (
-      ev.payload?.event === 'setGlobalSettings' ||
-      ev.payload?.event === 'administrationSelected'
-    ) {
+    try {
+      streamDeck.logger.debug(
+        'Invoice summary received SendToPlugin message:',
+        JSON.stringify(ev.payload, null, 2)
+      );
+
+      if (ev.payload?.event === 'setGlobalSettings') {
+        await this.handleGlobalSettings(ev);
+      } else if (ev.payload?.event === 'administrationSelected') {
+        await this.handleAdministrationChange(ev);
+      }
+    } catch (error) {
+      streamDeck.logger.error('Unexpected error in onSendToPlugin:', {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+      });
+    }
+  }
+
+  private async handleAdministrationChange(
+    ev: SendToPluginEvent<any, InvoiceSettings>
+  ): Promise<void> {
+    const { administrationId } = ev.payload;
+    const currentSettings = await ev.action.getSettings();
+
+    streamDeck.logger.debug(
+      `handleAdministrationChange called with administrationId: ${administrationId}`
+    );
+
+    if (!currentSettings.apiKey || !administrationId) {
+      streamDeck.logger.debug('Missing apiKey or administrationId, aborting');
+      return;
+    }
+
+    try {
+      const moneybirdService = new MoneybirdService(currentSettings.apiKey, administrationId);
+
+      streamDeck.logger.debug('Fetching contacts...');
+      const rawContacts = await moneybirdService.getContacts();
+
+      const contacts = Object.fromEntries(
+        rawContacts.map(contact => [contact.id, contactToJson(contact)])
+      );
+
+      streamDeck.logger.debug(
+        `Fetched ${rawContacts.length} contacts for administration ${administrationId}`
+      );
+
+      const newSettings: InvoiceSettings = {
+        ...currentSettings,
+        administrationId,
+        contacts,
+        contactId: '',
+      };
+
+      await ev.action.setSettings(newSettings);
+      streamDeck.logger.debug('Settings saved with new data');
+
+      // Update summary after loading new data
       await this.updateSummary(ev as any);
+    } catch (fetchError) {
+      streamDeck.logger.error('Error fetching Moneybird data:', {
+        message: (fetchError as Error).message,
+        stack: (fetchError as Error).stack,
+        response: (fetchError as any).response?.data,
+      });
+    }
+  }
+
+  private async handleGlobalSettings(ev: SendToPluginEvent<any, InvoiceSettings>): Promise<void> {
+    const { apiKey } = ev.payload;
+    const currentSettings = await ev.action.getSettings();
+
+    if (!apiKey) {
+      streamDeck.logger.warn('No API key provided');
+      return;
+    }
+
+    try {
+      const moneybirdService = new MoneybirdService(apiKey);
+
+      const rawAdministrations = await moneybirdService.getAdministrations();
+      const administrations = Object.fromEntries(
+        rawAdministrations.map(admin => [admin.id, administrationToJson(admin)])
+      );
+      streamDeck.logger.debug(`Fetched ${rawAdministrations.length} administrations`);
+
+      const newSettings: InvoiceSettings = {
+        ...currentSettings,
+        apiKey,
+        administrations,
+        displayTitle: currentSettings.displayTitle,
+      };
+
+      await ev.action.setSettings(newSettings);
+    } catch (fetchError) {
+      streamDeck.logger.error('Error fetching Moneybird data:', {
+        message: (fetchError as Error).message,
+        stack: (fetchError as Error).stack,
+        response: (fetchError as any).response?.data,
+      });
+
+      const clearedSettings = {
+        ...currentSettings,
+        apiKey,
+        administrations: {},
+        contacts: {},
+      };
+      await ev.action.setSettings(clearedSettings);
     }
   }
 }

@@ -24,6 +24,8 @@ export interface InvoiceSettings extends JsonObject {
   apiKey: string;
   administrationId: string;
   contactId: string;
+  periodType?: 'month' | 'quarter' | 'year';
+  periodRange?: 'current' | 'last';
   period?:
     | 'current_month'
     | 'last_month'

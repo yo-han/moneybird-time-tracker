@@ -1,6 +1,6 @@
 {
 	"Name": "Moneybird Timer",
-	"Version": "0.4.0.1",
+	"Version": "0.4.4.1",
 	"Author": "Johan Kuijt",
 	"Actions": [
 		{
@@ -44,7 +44,7 @@
 			"UUID": "com.johan-kuijt.moneybird-timer.invoice-summary",
 			"Icon": "imgs/actions/invoice/icon",
 			"Tooltip": "Shows summary of hours for selected period",
-			"PropertyInspectorPath": "ui/invoice-creator.html",
+			"PropertyInspectorPath": "ui/invoice-summary.html",
 			"Controllers": [
 				"Keypad"
 			],
