@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Moneybird Invoice Creator Settings</title>
+    <script src="https://sdpi-components.dev/releases/v3/sdpi-components.js"></script>
+    <style>
+        .error {
+            color: #ff0000;
+            font-size: 12px;
+            margin-top: 4px;
+        }
+        .hidden {
+            display: none;
+        }
+        .loading {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <sdpi-item label="Display title">
+        <sdpi-textfield id="displayTitle" setting="displayTitle" placeholder="Title of the key"></sdpi-textfield>
+    </sdpi-item>
+
+    <sdpi-item label="API Key">
+        <sdpi-textfield id="apiKey" setting="apiKey" type="password"></sdpi-textfield>
+        <div id="apiKeyError" class="error hidden"></div>
+    </sdpi-item>
+
+    <sdpi-item label="Administration">
+        <sdpi-select id="administrationId" setting="administrationId">
+            <option value="">Select an administration</option>
+        </sdpi-select>
+        <div id="administrationError" class="error hidden"></div>
+    </sdpi-item>
+
+    <sdpi-item label="Contact">
+        <sdpi-select id="contactId" setting="contactId">
+            <option value="">Select a contact</option>
+        </sdpi-select>
+        <div id="contactError" class="error hidden"></div>
+    </sdpi-item>
+
+    <sdpi-item label="Period Type">
+        <sdpi-select id="periodType" setting="periodType">
+            <option value="month">Month</option>
+            <option value="quarter">Quarter</option>
+            <option value="year">Year</option>
+        </sdpi-select>
+    </sdpi-item>
+
+    <sdpi-item label="Period Range">
+        <sdpi-select id="periodRange" setting="periodRange">
+            <option value="current">This</option>
+            <option value="last">Last</option>
+        </sdpi-select>
+    </sdpi-item>
+
+    <sdpi-item label="Hourly Rate (€)">
+        <sdpi-textfield id="hourlyRate" setting="hourlyRate" type="text" placeholder="75" pattern="[0-9]+([.,][0-9]+)?"></sdpi-textfield>
+    </sdpi-item>
+
+    <sdpi-item label="Description">
+        <sdpi-textfield id="description" setting="description" placeholder="Invoice description"></sdpi-textfield>
+    </sdpi-item>
+
+    <script>
+    (function() {
+        'use strict';
+        
+        const { streamDeckClient } = SDPIComponents;
+        let isConnected = false;
+        let currentSettings = {};
+        let isLoading = false;
+
+        function setLoading(loading) {
+            isLoading = loading;
+            const selects = document.querySelectorAll('sdpi-select');
+            selects.forEach(select => {
+                if (loading) {
+                    select.classList.add('loading');
+                } else {
+                    select.classList.remove('loading');
+                }
+            });
+        }
+
+        function showError(elementId, message) {
+            const errorDiv = document.getElementById(`${elementId}Error`);
+            if (errorDiv) {
+                errorDiv.textContent = message;
+                errorDiv.classList.remove('hidden');
+            }
+        }
+
+        function hideError(elementId) {
+            const errorDiv = document.getElementById(`${elementId}Error`);
+            if (errorDiv) {
+                errorDiv.classList.add('hidden');
+            }
+        }
+
+        function updateFormFields(settings = {}) {
+            try {
+                const relevantKeys = ['apiKey', 'displayTitle', 'administrationId', 'contactId', 'periodType', 'periodRange', 'description', 'hourlyRate'];
+                
+                // Handle backwards compatibility - convert old period to new format
+                if (settings.period && !settings.periodType) {
+                    const periodMap = {
+                        'current_month': { type: 'month', range: 'current' },
+                        'last_month': { type: 'month', range: 'last' },
+                        'current_quarter': { type: 'quarter', range: 'current' },
+                        'last_quarter': { type: 'quarter', range: 'last' },
+                        'current_year': { type: 'year', range: 'current' }
+                    };
+                    
+                    const mapped = periodMap[settings.period];
+                    if (mapped) {
+                        settings.periodType = mapped.type;
+                        settings.periodRange = mapped.range;
+                    }
+                }
+                
+                relevantKeys.forEach(key => {
+                    const value = settings[key];
+                    if (value !== undefined) {
+                        try {
+                            const element = document.getElementById(key);
+                            if (element) {
+                                element.value = value?.toString() || '';
+                                hideError(key);
+                            }
+                        } catch (fieldError) {
+                            showError(key, 'Error updating field');
+                        }
+                    }
+                });
+                
+                // Set defaults if not set
+                const periodTypeElement = document.getElementById('periodType');
+                if (periodTypeElement && !settings.periodType) {
+                    periodTypeElement.value = 'month';
+                }
+                
+                const periodRangeElement = document.getElementById('periodRange');
+                if (periodRangeElement && !settings.periodRange) {
+                    periodRangeElement.value = 'current';
+                }
+                
+                const hourlyRateElement = document.getElementById('hourlyRate');
+                if (hourlyRateElement && (!settings.hourlyRate || settings.hourlyRate === '')) {
+                    hourlyRateElement.value = '75';
+                    hourlyRateElement.placeholder = '75';
+                }
+            } catch (error) {
+                console.error('Error updating form fields:', error);
+            }
+        }
+
+        async function updateDropdown(elementId, items = {}, valueKey = 'id', nameKey = 'name', defaultText = 'Select an option') {
+            try {
+                const select = document.getElementById(elementId);
+                if (!select) return;
+
+                const options = [{ value: '', text: defaultText }];
+                
+                if (Array.isArray(items)) {
+                    items.forEach(item => {
+                        if (item?.[valueKey]) {
+                            let displayName = item[nameKey] || '';
+                            
+                            if (displayName) {
+                                options.push({
+                                    value: item[valueKey],
+                                    text: displayName
+                                });
+                            }
+                        }
+                    });
+                } else if (typeof items === 'object') {
+                    Object.entries(items).forEach(([key, item]) => {
+                        if (item?.[valueKey]) {
+                            let displayName = item[nameKey] || '';
+                            
+                            if (displayName) {
+                                options.push({
+                                    value: item[valueKey],
+                                    text: displayName
+                                });
+                            }
+                        }
+                    });
+                }
+
+                const optionsHtml = options.map(opt => 
+                    `<option value="${opt.value}">${opt.text}</option>`
+                ).join('');
+
+                select.innerHTML = optionsHtml;
+
+                // Restore saved value if exists
+                if (currentSettings[select.getAttribute('setting')]) {
+                    select.value = currentSettings[select.getAttribute('setting')];
+                }
+
+                hideError(elementId);
+            } catch (error) {
+                showError(elementId, `Error loading ${elementId}`);
+            }
+        }
+
+        async function loadAdministrations() {
+            const apiKey = document.getElementById('apiKey')?.value;
+            if (!apiKey) return;
+
+            setLoading(true);
+            try {
+                await streamDeckClient.send('sendToPlugin', {
+                    event: 'setGlobalSettings',
+                    apiKey: apiKey
+                });
+            } catch (error) {
+                showError('apiKey', 'Error loading administrations');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function loadAdministrationData(administrationId) {
+            if (!administrationId) {
+                // Clear dropdowns
+                await updateDropdown('contactId', {}, 'id', 'company_name', 'Select a contact');
+                return;
+            }
+
+            setLoading(true);
+            try {
+                // Set loading state for dropdowns
+                await updateDropdown('contactId', {}, 'id', 'company_name', 'Loading contacts...');
+                
+                // Request data from plugin
+                await streamDeckClient.send('sendToPlugin', {
+                    event: 'administrationSelected',
+                    administrationId: administrationId
+                });
+            } catch (error) {
+                showError('administrationId', 'Error loading administration data');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function saveSettings() {
+            if (!isConnected) return;
+
+            const settings = {};
+            const elements = document.querySelectorAll('[setting]');
+            
+            elements.forEach(element => {
+                const settingName = element.getAttribute('setting');
+                
+                if (settingName) {
+                    settings[settingName] = element.value || '';
+                }
+            });
+
+            await streamDeckClient.setSettings(settings);
+            currentSettings = {...currentSettings, ...settings};
+        }
+
+        function initializeEventListeners() {
+            try {
+                // Listen for all setting changes
+                const settingElements = document.querySelectorAll('[setting]');
+                settingElements.forEach(element => {
+                    // Use both input and change events for better compatibility
+                    element.addEventListener('input', saveSettings);
+                    element.addEventListener('change', saveSettings);
+                });
+
+                // API Key input - load administrations
+                const apiKeyElement = document.getElementById('apiKey');
+                if (apiKeyElement) {
+                    let apiKeyTimeout;
+                    apiKeyElement.addEventListener('input', (e) => {
+                        clearTimeout(apiKeyTimeout);
+                        apiKeyTimeout = setTimeout(() => {
+                            if (e.target.value?.trim()) {
+                                loadAdministrations();
+                            }
+                        }, 500); // Debounce API calls
+                    });
+                }
+
+                // Administration select - load contacts
+                const adminElement = document.getElementById('administrationId');
+                if (adminElement) {
+                    let lastValue = adminElement.value;
+                    
+                    // Function to handle administration changes
+                    const handleAdminChange = (newValue) => {
+                        if (newValue !== lastValue) {
+                            console.log('Administration changed from', lastValue, 'to:', newValue);
+                            lastValue = newValue;
+                            loadAdministrationData(newValue);
+                        }
+                    };
+                    
+                    // Listen to standard events
+                    adminElement.addEventListener('change', (e) => handleAdminChange(e.target.value));
+                    adminElement.addEventListener('input', (e) => handleAdminChange(e.target.value));
+                    
+                    // Also use MutationObserver to catch programmatic changes
+                    const observer = new MutationObserver((mutations) => {
+                        mutations.forEach((mutation) => {
+                            if (mutation.type === 'attributes' && mutation.attributeName === 'value') {
+                                handleAdminChange(adminElement.value);
+                            }
+                        });
+                    });
+                    
+                    // Start observing
+                    observer.observe(adminElement, {
+                        attributes: true,
+                        attributeFilter: ['value']
+                    });
+                    
+                    // Also poll for changes as a fallback
+                    setInterval(() => {
+                        if (adminElement.value !== lastValue) {
+                            handleAdminChange(adminElement.value);
+                        }
+                    }, 250);
+                }
+            } catch (error) {
+                console.error('Error initializing event listeners:', error);
+            }
+        }
+
+        streamDeckClient.didReceiveSettings.subscribe(async event => {
+            try {
+                const settings = event?.payload?.settings || {};
+                console.log('Received settings:', settings);
+                
+                currentSettings = settings;
+                
+                // Update form fields
+                updateFormFields(settings);
+                
+                // Update administrations dropdown if we have them
+                if (settings.administrations && typeof settings.administrations === 'object') {
+                    await updateDropdown('administrationId', settings.administrations);
+                    
+                    // Force trigger change if we have a selected administration
+                    if (settings.administrationId) {
+                        const adminElement = document.getElementById('administrationId');
+                        if (adminElement) {
+                            // Set the value again to ensure it's selected
+                            adminElement.value = settings.administrationId;
+                            
+                            // If this is a new administration selection (no contacts loaded yet), load the data
+                            if (!settings.contacts || Object.keys(settings.contacts).length === 0) {
+                                console.log('Administration set but no contacts, loading data...');
+                                setTimeout(() => {
+                                    loadAdministrationData(settings.administrationId);
+                                }, 200);
+                            }
+                        }
+                    }
+                }
+
+                // Update contacts dropdown if we have the data
+                if (settings.contacts && typeof settings.contacts === 'object') {
+                    await updateDropdown('contactId', settings.contacts, 'id', 'company_name', 'Select a contact');
+                }
+            } catch (error) {
+                console.error('Error in didReceiveSettings:', error);
+            }
+        });
+
+        window.connectElgatoStreamDeckSocket = async function(port, uuid, event, info, actionInfo) {
+            try {
+                await streamDeckClient.connect(port, uuid, event, JSON.parse(info), JSON.parse(actionInfo));
+                
+                isConnected = true;
+                
+                initializeEventListeners();
+                
+                console.log('Connected to Stream Deck');
+            } catch (error) {
+                console.error('Error connecting to Stream Deck:', error);
+            }
+        };
+    })();
+    </script>
+</body>
+</html>

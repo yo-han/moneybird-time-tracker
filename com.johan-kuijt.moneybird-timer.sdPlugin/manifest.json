@@ -1,6 +1,6 @@
 {
 	"Name": "Moneybird Timer",
-	"Version": "0.3.1.3",
+	"Version": "0.4.4.1",
 	"Author": "Johan Kuijt",
 	"Actions": [
 		{
@@ -19,6 +19,38 @@
 				},
 				{
 					"Image": "imgs/actions/timer/key_active",
+					"TitleAlignment": "middle"
+				}
+			]
+		},
+		{
+			"Name": "Invoice Creator",
+			"UUID": "com.johan-kuijt.moneybird-timer.invoice-creator",
+			"Icon": "imgs/actions/invoice/icon",
+			"Tooltip": "Create invoice for tracked hours",
+			"PropertyInspectorPath": "ui/invoice-creator.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/invoice/key_default",
+					"TitleAlignment": "middle"
+				}
+			]
+		},
+		{
+			"Name": "Invoice Summary",
+			"UUID": "com.johan-kuijt.moneybird-timer.invoice-summary",
+			"Icon": "imgs/actions/invoice/icon",
+			"Tooltip": "Shows summary of hours for selected period",
+			"PropertyInspectorPath": "ui/invoice-summary.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/invoice/key_success",
 					"TitleAlignment": "middle"
 				}
 			]

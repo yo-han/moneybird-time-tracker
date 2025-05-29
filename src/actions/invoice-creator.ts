@@ -1,0 +1,427 @@
+import streamDeck, {
+  action,
+  KeyDownEvent,
+  KeyUpEvent,
+  SingletonAction,
+  WillAppearEvent,
+  SendToPluginEvent,
+  DidReceiveSettingsEvent,
+} from '@elgato/streamdeck';
+import { MoneybirdService } from '../services/moneybird';
+import { InvoiceSettings, administrationToJson, contactToJson } from '../types/moneybird';
+import {
+  startOfMonth,
+  endOfMonth,
+  format,
+  subMonths,
+  startOfQuarter,
+  endOfQuarter,
+  startOfYear,
+  endOfYear,
+} from 'date-fns';
+import path from 'path';
+
+@action({ UUID: 'com.johan-kuijt.moneybird-timer.invoice-creator' })
+export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
+  private longPressTimer?: NodeJS.Timeout;
+  private isLongPress = false;
+  private periodCycleTimeout?: NodeJS.Timeout;
+
+  private periods = [
+    { key: 'current_month', label: 'This Month' },
+    { key: 'last_month', label: 'Last Month' },
+    { key: 'current_quarter', label: 'This Quarter' },
+    { key: 'last_quarter', label: 'Last Quarter' },
+    { key: 'current_year', label: 'This Year' },
+    { key: 'last_year', label: 'Last Year' },
+  ];
+
+  private getPeriodKey(settings: InvoiceSettings): string {
+    // Use new format if available
+    if (settings.periodType && settings.periodRange) {
+      const range = settings.periodRange === 'last' ? 'last' : 'current';
+      return `${range}_${settings.periodType}`;
+    }
+    // Fall back to old format
+    return settings.period || 'current_month';
+  }
+
+  private getPeriodLabel(settings: InvoiceSettings): string {
+    const periodKey = this.getPeriodKey(settings);
+    const period = this.periods.find(p => p.key === periodKey);
+    return period ? period.label : 'This Month';
+  }
+
+  private getImagePath(type: 'default' | 'success' | 'error'): string {
+    const baseDir = 'imgs/actions/invoice';
+    const imageName = `key_${type}.png`;
+    return path.join(baseDir, imageName);
+  }
+
+  override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<InvoiceSettings>): Promise<void> {
+    try {
+      const settings = ev.payload.settings;
+      const instanceId = ev.action.id;
+
+      streamDeck.logger.debug(
+        `[InvoiceCreator] Settings received for instance ${instanceId}:`,
+        settings
+      );
+
+      if (
+        settings.displayTitle !== undefined ||
+        settings.periodType !== undefined ||
+        settings.periodRange !== undefined
+      ) {
+        // Update title with period info if configured
+        if (settings.apiKey && settings.administrationId && settings.contactId) {
+          const periodLabel = this.getPeriodLabel(settings);
+          const displayTitle = settings.displayTitle || 'Invoice';
+          await ev.action.setTitle(`${displayTitle}\n${periodLabel}`);
+        } else {
+          const title = settings.displayTitle || 'Invoice';
+          await ev.action.setTitle(String(title));
+        }
+      }
+
+      streamDeck.logger.debug(
+        `[InvoiceCreator] Settings updated for instance ${instanceId}:`,
+        settings
+      );
+    } catch (error) {
+      streamDeck.logger.error('Error in onDidReceiveSettings:', error);
+    }
+  }
+
+  override async onSendToPlugin(ev: SendToPluginEvent<any, InvoiceSettings>): Promise<void> {
+    try {
+      streamDeck.logger.debug(
+        'Invoice plugin received SendToPlugin message:',
+        JSON.stringify(ev.payload, null, 2)
+      );
+
+      if (ev.payload?.event === 'setGlobalSettings') {
+        await this.handleGlobalSettings(ev);
+      } else if (ev.payload?.event === 'administrationSelected') {
+        await this.handleAdministrationChange(ev);
+      }
+    } catch (error) {
+      streamDeck.logger.error('Unexpected error in onSendToPlugin:', {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+      });
+    }
+  }
+
+  private async handleAdministrationChange(
+    ev: SendToPluginEvent<any, InvoiceSettings>
+  ): Promise<void> {
+    const { administrationId } = ev.payload;
+    const currentSettings = await ev.action.getSettings();
+
+    streamDeck.logger.debug(
+      `handleAdministrationChange called with administrationId: ${administrationId}`
+    );
+
+    if (!currentSettings.apiKey || !administrationId) {
+      streamDeck.logger.debug('Missing apiKey or administrationId, aborting');
+      return;
+    }
+
+    try {
+      const moneybirdService = new MoneybirdService(currentSettings.apiKey, administrationId);
+
+      streamDeck.logger.debug('Fetching contacts...');
+      const rawContacts = await moneybirdService.getContacts();
+
+      const contacts = Object.fromEntries(
+        rawContacts.map(contact => [contact.id, contactToJson(contact)])
+      );
+
+      streamDeck.logger.debug(
+        `Fetched ${rawContacts.length} contacts for administration ${administrationId}`
+      );
+
+      const newSettings: InvoiceSettings = {
+        ...currentSettings,
+        administrationId,
+        contacts,
+        contactId: '',
+      };
+
+      await ev.action.setSettings(newSettings);
+      streamDeck.logger.debug('Settings saved with new data');
+    } catch (fetchError) {
+      streamDeck.logger.error('Error fetching Moneybird data:', {
+        message: (fetchError as Error).message,
+        stack: (fetchError as Error).stack,
+        response: (fetchError as any).response?.data,
+      });
+    }
+  }
+
+  private async handleGlobalSettings(ev: SendToPluginEvent<any, InvoiceSettings>): Promise<void> {
+    const { apiKey } = ev.payload;
+    const currentSettings = await ev.action.getSettings();
+
+    if (!apiKey) {
+      streamDeck.logger.warn('No API key provided');
+      return;
+    }
+
+    try {
+      const moneybirdService = new MoneybirdService(apiKey);
+
+      const rawAdministrations = await moneybirdService.getAdministrations();
+      const administrations = Object.fromEntries(
+        rawAdministrations.map(admin => [admin.id, administrationToJson(admin)])
+      );
+      streamDeck.logger.debug(`Fetched ${rawAdministrations.length} administrations`);
+
+      const newSettings: InvoiceSettings = {
+        ...currentSettings,
+        apiKey,
+        administrations,
+        displayTitle: currentSettings.displayTitle,
+      };
+
+      await ev.action.setSettings(newSettings);
+    } catch (fetchError) {
+      streamDeck.logger.error('Error fetching Moneybird data:', {
+        message: (fetchError as Error).message,
+        stack: (fetchError as Error).stack,
+        response: (fetchError as any).response?.data,
+      });
+
+      const clearedSettings = {
+        ...currentSettings,
+        apiKey,
+        administrations: {},
+        contacts: {},
+      };
+      await ev.action.setSettings(clearedSettings);
+    }
+  }
+
+  override async onWillAppear(ev: WillAppearEvent<InvoiceSettings>): Promise<void> {
+    const settings = ev.payload.settings;
+    const instanceId = ev.action.id;
+
+    streamDeck.logger.debug(
+      `Invoice action appeared with settings for instance ${instanceId}:`,
+      settings
+    );
+
+    await ev.action.setImage(this.getImagePath('default'));
+
+    // Show period in title if configured
+    if (settings.apiKey && settings.administrationId && settings.contactId) {
+      const periodLabel = this.getPeriodLabel(settings);
+      const displayTitle = settings.displayTitle || 'Invoice';
+      await ev.action.setTitle(`${displayTitle}\n${periodLabel}`);
+    } else {
+      const title = settings.displayTitle ? settings.displayTitle : 'Invoice';
+      await ev.action.setTitle(String(title));
+    }
+  }
+
+  override async onKeyDown(ev: KeyDownEvent<InvoiceSettings>): Promise<void> {
+    const settings = ev.payload.settings;
+    const instanceId = ev.action.id;
+
+    streamDeck.logger.debug(
+      `Invoice key pressed for instance ${instanceId} with settings:`,
+      settings
+    );
+
+    if (!settings.apiKey || !settings.administrationId || !settings.contactId) {
+      streamDeck.logger.debug('Missing required settings');
+      await ev.action.setImage(this.getImagePath('default'));
+      await ev.action.setTitle('Config needed');
+      return;
+    }
+
+    // Set up long press detection
+    this.isLongPress = false;
+    this.longPressTimer = setTimeout(() => {
+      this.isLongPress = true;
+      this.cyclePeriod(ev);
+    }, 500); // 500ms = long press
+  }
+
+  override async onKeyUp(ev: KeyUpEvent<InvoiceSettings>): Promise<void> {
+    // Clear the long press timer
+    if (this.longPressTimer) {
+      clearTimeout(this.longPressTimer);
+      this.longPressTimer = undefined;
+    }
+
+    // If it was a long press, we already handled it
+    if (this.isLongPress) {
+      this.isLongPress = false;
+      return;
+    }
+
+    // Normal press - create invoice
+    await this.createInvoice(ev);
+  }
+
+  private async cyclePeriod(
+    ev: KeyDownEvent<InvoiceSettings> | KeyUpEvent<InvoiceSettings>
+  ): Promise<void> {
+    const settings = ev.payload.settings;
+
+    // Toggle between current and last
+    const currentRange = settings.periodRange || 'current';
+    const newRange = currentRange === 'current' ? 'last' : 'current';
+
+    // Update settings - only for this action instance
+    const newSettings: InvoiceSettings = {
+      ...settings,
+      periodRange: newRange,
+    };
+
+    // Use action-specific setSettings
+    await ev.action.setSettings(newSettings);
+
+    // Update display
+    const displayTitle = settings.displayTitle || 'Invoice';
+    const periodLabel = this.getPeriodLabel(newSettings);
+    await ev.action.setTitle(`${displayTitle}\n${periodLabel}`);
+
+    // Show temporary feedback
+    await ev.action.setImage(this.getImagePath('success'));
+
+    // Clear any existing timeout
+    if (this.periodCycleTimeout) {
+      clearTimeout(this.periodCycleTimeout);
+    }
+
+    // Reset image after a short delay
+    this.periodCycleTimeout = setTimeout(async () => {
+      await ev.action.setImage(this.getImagePath('default'));
+    }, 1000);
+  }
+
+  private async createInvoice(ev: KeyUpEvent<InvoiceSettings>): Promise<void> {
+    const settings = ev.payload.settings;
+    const instanceId = ev.action.id;
+
+    const moneybirdService = new MoneybirdService(settings.apiKey, settings.administrationId);
+
+    try {
+      // Show processing state
+      await ev.action.setTitle('Creating...');
+
+      // Determine period
+      const now = new Date();
+      let startDate: Date;
+      let endDate: Date;
+      let periodDescription: string;
+
+      const periodKey = this.getPeriodKey(settings);
+
+      switch (periodKey) {
+        case 'last_month': {
+          const lastMonth = subMonths(now, 1);
+          startDate = startOfMonth(lastMonth);
+          endDate = endOfMonth(lastMonth);
+          periodDescription = format(lastMonth, 'MMMM yyyy');
+          break;
+        }
+        case 'current_quarter': {
+          startDate = startOfQuarter(now);
+          endDate = endOfQuarter(now);
+          periodDescription = `Q${Math.floor(now.getMonth() / 3) + 1} ${now.getFullYear()}`;
+          break;
+        }
+        case 'last_quarter': {
+          const lastQuarter = subMonths(now, 3);
+          startDate = startOfQuarter(lastQuarter);
+          endDate = endOfQuarter(lastQuarter);
+          periodDescription = `Q${Math.floor(lastQuarter.getMonth() / 3) + 1} ${lastQuarter.getFullYear()}`;
+          break;
+        }
+        case 'current_year': {
+          startDate = startOfYear(now);
+          endDate = endOfYear(now);
+          periodDescription = format(now, 'yyyy');
+          break;
+        }
+        case 'last_year': {
+          const lastYear = subMonths(now, 12);
+          startDate = startOfYear(lastYear);
+          endDate = endOfYear(lastYear);
+          periodDescription = format(lastYear, 'yyyy');
+          break;
+        }
+        default: // current_month
+          startDate = startOfMonth(now);
+          endDate = endOfMonth(now);
+          periodDescription = format(now, 'MMMM yyyy');
+      }
+
+      streamDeck.logger.debug(`Fetching time entries from ${startDate} to ${endDate}`);
+
+      // Fetch time entries for the contact in the selected period
+      const timeEntries = await moneybirdService.getTimeEntriesForContact(
+        settings.contactId,
+        startDate,
+        endDate
+      );
+
+      if (timeEntries.length === 0) {
+        await ev.action.setTitle('No hours');
+        await ev.action.setImage(this.getImagePath('error'));
+
+        // Reset after 3 seconds
+        setTimeout(async () => {
+          const title = settings.displayTitle || 'Invoice';
+          const periodLabel = this.getPeriodLabel(settings);
+          await ev.action.setTitle(`${title}\n${periodLabel}`);
+          await ev.action.setImage(this.getImagePath('default'));
+        }, 3000);
+
+        return;
+      }
+
+      // Create invoice
+      const hourlyRateString = String(settings.hourlyRate).replace(',', '.');
+      const hourlyRate = parseFloat(hourlyRateString) || 75;
+      const invoice = await moneybirdService.createInvoiceFromTimeEntries(
+        settings.contactId,
+        timeEntries,
+        settings.description || `Werkzaamheden ${periodDescription}`,
+        settings.workflow_id,
+        hourlyRate
+      );
+
+      streamDeck.logger.debug(`Invoice created successfully:`, invoice);
+
+      // Show success state
+      await ev.action.setTitle('✓ Created');
+      await ev.action.setImage(this.getImagePath('success'));
+
+      // Reset after 3 seconds
+      setTimeout(async () => {
+        const title = settings.displayTitle || 'Invoice';
+        const periodLabel = this.getPeriodLabel(settings);
+        await ev.action.setTitle(`${title}\n${periodLabel}`);
+        await ev.action.setImage(this.getImagePath('default'));
+      }, 3000);
+    } catch (error: any) {
+      streamDeck.logger.error(`Error creating invoice for instance ${instanceId}:`, error);
+
+      await ev.action.setImage(this.getImagePath('error'));
+      await ev.action.setTitle('Error');
+
+      // Reset after 3 seconds
+      setTimeout(async () => {
+        const title = settings.displayTitle || 'Invoice';
+        const periodLabel = this.getPeriodLabel(settings);
+        await ev.action.setTitle(`${title}\n${periodLabel}`);
+        await ev.action.setImage(this.getImagePath('default'));
+      }, 3000);
+    }
+  }
+}
