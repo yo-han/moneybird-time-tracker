@@ -1,91 +1,206 @@
 # Moneybird Time Tracker Stream Deck Plugin
 
-Track your time directly from your Stream Deck with this convenient Moneybird integration.
+Een handige Stream Deck plugin voor tijdregistratie en facturatie met Moneybird. Track je tijd, maak facturen en bekijk werkuren overzichten met één druk op de knop.
 
-## 🔧 Prerequisites
+## 🚀 Functies
+
+Deze plugin biedt drie handige acties:
+
+### 1. **Time Tracker** - Start/Stop Timer
+
+- Track je werktijd direct in Moneybird
+- Real-time timer weergave op je Stream Deck knop
+- Automatische pauze detectie
+- Visuele feedback met verschillende iconen voor actief/inactief
+
+### 2. **Invoice Creator** - Maak Facturen
+
+- Genereer facturen voor gewerkte uren met één druk
+- Ondersteunt verschillende periodes (maand, kwartaal, jaar)
+- Wissel tussen periodes met een lange druk op de knop
+- Automatische berekening van totaalbedrag
+
+### 3. **Invoice Summary** - Uren Overzicht
+
+- Live weergave van gewerkte uren voor geselecteerde periode
+- Toont totaal aantal uren en berekend bedrag
+- Automatische updates elke 30 seconden
+- Handmatige refresh met een druk op de knop
+
+## 🔧 Vereisten
 
 - Elgato Stream Deck
-- Moneybird account
-- Personal Moneybird API key
+- Moneybird account met API toegang
+- Personal API key van Moneybird
 
-## 🚀 Installation
+## 📦 Installatie
 
-### Automatic Installation
-1. Download the latest `.streamDeckPlugin` file from the [Releases](https://github.com/yo-han/moneybird-time-tracker/releases) page
-2. Double-click the downloaded file
-3. Stream Deck will prompt you to install the plugin
+### Automatische Installatie
 
-### Manual Installation
-1. Download the `.streamDeckPlugin` file from the Releases page
-2. Open Stream Deck
-3. Go to the Plugins section
-4. Click "Install Plugin"
-5. Select the downloaded `.streamDeckPlugin` file
+1. Download het laatste `.streamDeckPlugin` bestand van de [Releases](https://github.com/yo-han/moneybird-time-tracker/releases) pagina
+2. Dubbelklik op het gedownloade bestand
+3. Stream Deck installeert de plugin automatisch
 
-## 🛠 Configuration
+### Handmatige Installatie
 
-### Obtaining Your Moneybird API Key
-1. Log in to your Moneybird account
-2. Go to Account Settings
-3. Navigate to API Keys section
-4. Create a new API key with appropriate permissions
-5. Copy the generated API key
+1. Download het `.streamDeckPlugin` bestand
+2. Open Stream Deck software
+3. Ga naar het Plugins gedeelte
+4. Klik op "Install Plugin"
+5. Selecteer het gedownloade bestand
 
-### Plugin Setup
-1. Add the Moneybird Time Tracker action to your Stream Deck
-2. Click on the action to open the configuration
-3. Enter your Moneybird API key
-4. Select your administration
-5. Choose a project
-6. Select the user for time tracking
-7. (Optional) Add a description
-8. Set billable status
+## 🛠 Configuratie
 
-## 🕰 Using the Plugin
-- Click the Stream Deck button to start/stop time tracking
-- The button will show the current tracking time
-- Long press or multiple clicks can be configured for additional actions
+### Moneybird API Key verkrijgen
 
-## 🆘 Troubleshooting
-- Ensure you have the latest version of the plugin
-- Verify your Moneybird API key has the correct permissions
-- Check your internet connection
-- Restart Stream Deck if experiencing issues
+1. Log in op je Moneybird account
+2. Ga naar **Instellingen** → **Ontwikkelaarscentrum**
+3. Klik op **Persoonlijke API-tokens**
+4. Maak een nieuwe API key aan met de juiste rechten:
+   - Verkoop (voor facturen)
+   - Tijdregistraties
+   - Contacten
+5. Kopieer de gegenereerde API key
+
+### Plugin Instellen
+
+#### Time Tracker configureren:
+
+1. Sleep de **Time Tracker** actie naar je Stream Deck
+2. Klik op de actie voor configuratie
+3. Vul je Moneybird API key in
+4. Selecteer je administratie
+5. Kies het project waarvoor je tijd wilt tracken
+6. Selecteer de gebruiker (meestal jezelf)
+7. (Optioneel) Voeg een standaard omschrijving toe
+8. Stel in of de tijd factureerbaar is
+
+#### Invoice Creator configureren:
+
+1. Sleep de **Invoice Creator** actie naar je Stream Deck
+2. Configureer je API key en administratie
+3. Selecteer de klant waarvoor je facturen wilt maken
+4. Stel je uurtarief in
+5. Kies de gewenste periode (standaard: huidige maand)
+6. (Optioneel) Pas de knoptitel aan
+7. (Optioneel) Selecteer een workflow voor automatische acties
+
+#### Invoice Summary configureren:
+
+1. Sleep de **Invoice Summary** actie naar je Stream Deck
+2. Gebruik dezelfde API key en administratie
+3. Selecteer de klant voor het overzicht
+4. Stel je uurtarief in voor bedragberekening
+5. Kies de periode voor weergave
+6. (Optioneel) Pas de weergavetitel aan
+
+## 💡 Gebruik
+
+### Time Tracker
+
+- **Enkele druk**: Start of stop de timer
+- De knop toont de verstreken tijd tijdens het tracken
+- Verschillende iconen geven de status aan:
+  - Grijs: Timer staat uit
+  - Groen: Timer loopt actief
+  - Rood: Fout opgetreden
+
+### Invoice Creator
+
+- **Enkele druk**: Maakt direct een factuur voor de geselecteerde periode
+- **Lange druk** (0.5 sec): Wissel tussen huidige en vorige periode
+- De knop toont de geselecteerde periode
+- Feedback berichten:
+  - "Creating...": Factuur wordt aangemaakt
+  - "✓ Created": Factuur succesvol aangemaakt
+  - "No hours": Geen uren gevonden in periode
+  - "Error": Fout bij aanmaken
+
+### Invoice Summary
+
+- Toont automatisch: `[Titel] X.X uur = €XXX`
+- Updates elke 30 seconden automatisch
+- **Enkele druk**: Forceer een update
+- Toont "No hours" als er geen tijd is geregistreerd
+
+## 🎯 Handige Tips
+
+### Efficiënte Workflow Setup
+
+1. **Dagelijkse Timer**: Plaats een Time Tracker voor je meest gebruikte project
+2. **Maandelijkse Facturatie**: Zet Invoice Creator en Summary naast elkaar voor snel overzicht
+3. **Multi-Client Setup**: Maak aparte profielen voor verschillende klanten
+
+### Periode Instellingen
+
+- **Maand**: Ideaal voor maandelijkse facturatie
+- **Kwartaal**: Perfect voor grotere projecten
+- **Jaar**: Handig voor jaaroverzichten
+
+### Meerdere Instanties
+
+Je kunt meerdere knoppen van dezelfde actie gebruiken:
+
+- Verschillende Time Trackers voor verschillende projecten
+- Invoice Creators voor verschillende klanten
+- Summary knoppen voor verschillende periodes
+
+## 🔍 Probleemoplossing
+
+### API Key werkt niet
+
+- Controleer of de key alle benodigde rechten heeft
+- Verifieer dat de key niet is verlopen
+- Test de key in Moneybird's API playground
+
+### Geen projecten/contacten zichtbaar
+
+- Controleer je internetverbinding
+- Verifieer dat je de juiste administratie hebt geselecteerd
+- Check of de contacten/projecten actief zijn in Moneybird
+
+### Timer stopt onverwacht
+
+- Controleer de Moneybird limieten (max. sessie duur)
+- Verifieer dat het project nog actief is
+- Check de Stream Deck logs voor foutmeldingen
+
+### Factuur wordt niet aangemaakt
+
+- Controleer of er gewerkte uren zijn in de periode
+- Verifieer dat de workflow (indien ingesteld) bestaat
+- Check of de contact actief is voor facturatie
 
 ## 🚨 Disclaimer
 
-This plugin is an independent third-party tool and is not officially developed, endorsed, or supported by Moneybird. It is a community-created solution to enhance your time tracking workflow.
+Deze plugin is een onafhankelijk ontwikkeld hulpmiddel en wordt niet officieel ondersteund door Moneybird B.V.
 
-**Important Notes:**
-- This plugin is not an official Moneybird product
-- Moneybird® is a registered trademark of Moneybird B.V.
-- Use of this plugin is at your own risk
-- The plugin is not affiliated with or approved by Moneybird
+**Belangrijke punten:**
 
-## 📝 License
+- Dit is geen officieel Moneybird product
+- Moneybird® is een geregistreerd handelsmerk van Moneybird B.V.
+- Gebruik is op eigen risico
+- De plugin is niet goedgekeurd door Moneybird
 
-MIT License
+## 📄 Licentie
 
-Copyright (c) 2025 Johan Kuijt
+MIT License - zie LICENSE bestand voor details
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+## 🤝 Bijdragen
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Bijdragen zijn welkom! Maak gerust een Pull Request aan.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+### Development Setup
 
-## 🤝 Contributing
+1. Clone de repository
+2. Run `npm install`
+3. Gebruik `npm run dev` voor development mode
+4. Test met `npm run build` voor productie build
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+## 📞 Support
+
+Voor vragen of problemen:
+
+- Open een [GitHub Issue](https://github.com/yo-han/moneybird-time-tracker/issues)
+- Check de [Stream Deck Developer docs](https://docs.elgato.com/streamdeck)
+- Raadpleeg de [Moneybird API documentatie](https://developer.moneybird.com/)
