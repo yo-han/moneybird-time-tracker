@@ -112,7 +112,7 @@ async function packagePlugin() {
               return false;
             }
           } else if (exclude.includes('*')) {
-            const pattern = new RegExp(exclude.replace('*', '.*'));
+            const pattern = new RegExp(exclude.replace(/\*/g, '.*'));
             if (pattern.test(relativePath)) {
               return false;
             }
