@@ -15,7 +15,7 @@
   "type": "module",
   "devDependencies": {
     "@elgato/cli": "^1.5.1",
-    "@eslint/js": "^9.38.0",
+    "@eslint/js": "^9.39.1",
     "@rollup/plugin-commonjs": "^29.0.0",
     "@rollup/plugin-json": "^6.1.0",
     "@rollup/plugin-node-resolve": "^16.0.3",
