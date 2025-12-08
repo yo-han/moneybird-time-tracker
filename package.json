@@ -34,7 +34,7 @@
     "typescript-eslint": "^8.48.0"
   },
   "dependencies": {
-    "@elgato/streamdeck": "^1.4.1",
+    "@elgato/streamdeck": "^2.0.0",
     "axios": "^1.13.2",
     "date-fns": "^4.1.0"
   }
