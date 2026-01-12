@@ -1,5 +1,11 @@
 // JsonObject and JsonValue types (removed from @elgato/streamdeck v2.0.1)
-export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue };
 
 export interface TimerSettings extends JsonObject {
