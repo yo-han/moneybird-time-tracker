@@ -21,6 +21,12 @@ import {
 } from 'date-fns';
 import path from 'path';
 
+type InvoicePluginPayload = {
+  event?: 'setGlobalSettings' | 'administrationSelected';
+  apiKey?: string;
+  administrationId?: string;
+};
+
 @action({ UUID: 'com.johan-kuijt.moneybird-timer.invoice-creator' })
 export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
   private longPressTimer?: NodeJS.Timeout;
@@ -63,10 +69,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       const settings = ev.payload.settings;
       const instanceId = ev.action.id;
 
-      streamDeck.logger.debug(
-        `[InvoiceCreator] Settings received for instance ${instanceId}:`,
-        settings
-      );
+      streamDeck.logger.debug(`[InvoiceCreator] Settings received for instance ${instanceId}`);
 
       if (
         settings.displayTitle !== undefined ||
@@ -84,20 +87,18 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
         }
       }
 
-      streamDeck.logger.debug(
-        `[InvoiceCreator] Settings updated for instance ${instanceId}:`,
-        settings
-      );
+      streamDeck.logger.debug(`[InvoiceCreator] Settings updated for instance ${instanceId}`);
     } catch (error) {
       streamDeck.logger.error('Error in onDidReceiveSettings:', error);
     }
   }
 
-  override async onSendToPlugin(ev: SendToPluginEvent<any, InvoiceSettings>): Promise<void> {
+  override async onSendToPlugin(
+    ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
+  ): Promise<void> {
     try {
       streamDeck.logger.debug(
-        'Invoice plugin received SendToPlugin message:',
-        JSON.stringify(ev.payload, null, 2)
+        `Invoice plugin received SendToPlugin event: ${ev.payload?.event || 'unknown'}`
       );
 
       if (ev.payload?.event === 'setGlobalSettings') {
@@ -114,7 +115,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
   }
 
   private async handleAdministrationChange(
-    ev: SendToPluginEvent<any, InvoiceSettings>
+    ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
   ): Promise<void> {
     const { administrationId } = ev.payload;
     const currentSettings = await ev.action.getSettings();
@@ -155,12 +156,13 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       streamDeck.logger.error('Error fetching Moneybird data:', {
         message: (fetchError as Error).message,
         stack: (fetchError as Error).stack,
-        response: (fetchError as any).response?.data,
       });
     }
   }
 
-  private async handleGlobalSettings(ev: SendToPluginEvent<any, InvoiceSettings>): Promise<void> {
+  private async handleGlobalSettings(
+    ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
+  ): Promise<void> {
     const { apiKey } = ev.payload;
     const currentSettings = await ev.action.getSettings();
 
@@ -190,7 +192,6 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       streamDeck.logger.error('Error fetching Moneybird data:', {
         message: (fetchError as Error).message,
         stack: (fetchError as Error).stack,
-        response: (fetchError as any).response?.data,
       });
 
       const clearedSettings = {
@@ -207,10 +208,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     const settings = ev.payload.settings;
     const instanceId = ev.action.id;
 
-    streamDeck.logger.debug(
-      `Invoice action appeared with settings for instance ${instanceId}:`,
-      settings
-    );
+    streamDeck.logger.debug(`Invoice action appeared for instance ${instanceId}`);
 
     await ev.action.setImage(this.getImagePath('default'));
 
@@ -229,10 +227,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     const settings = ev.payload.settings;
     const instanceId = ev.action.id;
 
-    streamDeck.logger.debug(
-      `Invoice key pressed for instance ${instanceId} with settings:`,
-      settings
-    );
+    streamDeck.logger.debug(`Invoice key pressed for instance ${instanceId}`);
 
     if (!settings.apiKey || !settings.administrationId || !settings.contactId) {
       streamDeck.logger.debug('Missing required settings');
@@ -409,7 +404,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
         await ev.action.setTitle(`${title}\n${periodLabel}`);
         await ev.action.setImage(this.getImagePath('default'));
       }, 3000);
-    } catch (error: any) {
+    } catch (error: unknown) {
       streamDeck.logger.error(`Error creating invoice for instance ${instanceId}:`, error);
 
       await ev.action.setImage(this.getImagePath('error'));

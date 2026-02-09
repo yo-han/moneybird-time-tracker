@@ -6,7 +6,7 @@ export type JsonValue =
   | null
   | JsonValue[]
   | { [key: string]: JsonValue };
-export type JsonObject = { [key: string]: JsonValue };
+export type JsonObject = { [key: string]: JsonValue | undefined };
 
 export interface TimerSettings extends JsonObject {
   apiKey: string;

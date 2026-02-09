@@ -2,3 +2,5 @@ node_modules
 /com.johan-kuijt.moneybird-timer.sdPlugin/logs
 com.johan-kuijt.moneybird-timer.streamDeckPlugin
 com.johan-kuijt.moneybird-timer-v0.1.streamDeckPlugin
+.claude/
+/com.johan-kuijt.moneybird-timer.sdPlugin/bin/*.map

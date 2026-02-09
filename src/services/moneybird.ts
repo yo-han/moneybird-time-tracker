@@ -47,8 +47,6 @@ export class MoneybirdService {
 
       streamDeck.logger.error('Moneybird API Error Response:', {
         status: error.response.status,
-        data: error.response.data,
-        headers: error.response.headers,
       });
     } else if (error.request) {
       errorMessage = 'No response received from Moneybird API. Check your internet connection.';
@@ -64,11 +62,14 @@ export class MoneybirdService {
   async getAdministrations(): Promise<MoneybirdAdministration[]> {
     try {
       streamDeck.logger.debug('Fetching administrations from Moneybird');
-      const response = await axios.get(`${this.baseUrl}/administrations.json`, {
-        headers: this.getHeaders(),
-      });
+      const response = await axios.get<Array<{ id: string; name: string }>>(
+        `${this.baseUrl}/administrations.json`,
+        {
+          headers: this.getHeaders(),
+        }
+      );
 
-      return response.data.map((admin: any) => ({
+      return response.data.map(admin => ({
         id: admin.id,
         name: admin.name,
       }));
@@ -80,11 +81,14 @@ export class MoneybirdService {
   async getUsers(administrationId: string): Promise<MoneybirdUser[]> {
     try {
       streamDeck.logger.debug(`Fetching users for administration ${administrationId}`);
-      const response = await axios.get(`${this.baseUrl}/${administrationId}/users.json`, {
-        headers: this.getHeaders(),
-      });
+      const response = await axios.get<Array<{ id: string; name: string; email?: string }>>(
+        `${this.baseUrl}/${administrationId}/users.json`,
+        {
+          headers: this.getHeaders(),
+        }
+      );
 
-      return response.data.map((user: any) => ({
+      return response.data.map(user => ({
         id: user.id,
         name: user.name,
         email: user.email || 'No email',
@@ -101,11 +105,14 @@ export class MoneybirdService {
       }
 
       streamDeck.logger.debug(`Fetching projects for administration ${this.administrationId}`);
-      const response = await axios.get(`${this.baseUrl}/${this.administrationId}/projects.json`, {
-        headers: this.getHeaders(),
-      });
+      const response = await axios.get<Array<{ id: string; name: string }>>(
+        `${this.baseUrl}/${this.administrationId}/projects.json`,
+        {
+          headers: this.getHeaders(),
+        }
+      );
 
-      return response.data.map((project: any) => ({
+      return response.data.map(project => ({
         id: project.id,
         name: project.name,
       }));
@@ -121,11 +128,18 @@ export class MoneybirdService {
       }
 
       streamDeck.logger.debug(`Fetching contacts for administration ${this.administrationId}`);
-      const response = await axios.get(`${this.baseUrl}/${this.administrationId}/contacts.json`, {
+      const response = await axios.get<
+        Array<{
+          id: string;
+          company_name?: string;
+          firstname?: string;
+          lastname?: string;
+        }>
+      >(`${this.baseUrl}/${this.administrationId}/contacts.json`, {
         headers: this.getHeaders(),
       });
 
-      return response.data.map((contact: any) => ({
+      return response.data.map(contact => ({
         id: contact.id,
         company_name: contact.company_name || '',
         firstname: contact.firstname || '',
@@ -186,11 +200,11 @@ export class MoneybirdService {
       );
 
       return response.data;
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const axiosError = error as AxiosError;
       streamDeck.logger.error('Moneybird API error:', {
-        message: error.message,
-        status: error.response?.status,
-        data: error.response?.data,
+        message: axiosError.message,
+        status: axiosError.response?.status,
       });
       throw error;
     }
@@ -218,11 +232,11 @@ export class MoneybirdService {
       );
 
       return response.data;
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const axiosError = error as AxiosError;
       streamDeck.logger.error('Moneybird API error in stopTimer:', {
-        message: error.message,
-        status: error.response?.status,
-        data: error.response?.data,
+        message: axiosError.message,
+        status: axiosError.response?.status,
       });
       throw error;
     }
@@ -302,7 +316,7 @@ export class MoneybirdService {
         },
       };
 
-      streamDeck.logger.debug('Creating invoice:', invoiceData);
+      streamDeck.logger.debug('Creating invoice in Moneybird');
 
       const response = await axios.post(
         `${this.baseUrl}/${this.administrationId}/sales_invoices.json`,

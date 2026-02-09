@@ -18,6 +18,12 @@ import {
 import { differenceInSeconds, differenceInMinutes, differenceInHours } from 'date-fns';
 import path from 'path';
 
+type TimerPluginPayload = {
+  event?: 'setGlobalSettings' | 'administrationSelected';
+  apiKey?: string;
+  administrationId?: string;
+};
+
 @action({ UUID: 'com.johan-kuijt.moneybird-timer.time-tracker' })
 export class TimeTracker extends SingletonAction<TimerSettings> {
   private updateIntervals: Map<string, NodeJS.Timeout> = new Map();
@@ -39,17 +45,18 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         await ev.action.setTitle(String(title));
       }
 
-      streamDeck.logger.debug(`Settings updated for instance ${instanceId}:`, settings);
+      streamDeck.logger.debug(`Settings updated for instance ${instanceId}`);
     } catch (error) {
       streamDeck.logger.error('Error in onDidReceiveSettings:', error);
     }
   }
 
-  override async onSendToPlugin(ev: SendToPluginEvent<any, TimerSettings>): Promise<void> {
+  override async onSendToPlugin(
+    ev: SendToPluginEvent<TimerPluginPayload, TimerSettings>
+  ): Promise<void> {
     try {
       streamDeck.logger.debug(
-        'Plugin received SendToPlugin message:',
-        JSON.stringify(ev.payload, null, 2)
+        `Plugin received SendToPlugin event: ${ev.payload?.event || 'unknown'}`
       );
 
       if (ev.payload?.event === 'setGlobalSettings') {
@@ -66,7 +73,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   }
 
   private async handleAdministrationChange(
-    ev: SendToPluginEvent<any, TimerSettings>
+    ev: SendToPluginEvent<TimerPluginPayload, TimerSettings>
   ): Promise<void> {
     const { administrationId } = ev.payload;
     const currentSettings = await ev.action.getSettings();
@@ -119,12 +126,13 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       streamDeck.logger.error('Error fetching Moneybird data:', {
         message: (fetchError as Error).message,
         stack: (fetchError as Error).stack,
-        response: (fetchError as any).response?.data,
       });
     }
   }
 
-  private async handleGlobalSettings(ev: SendToPluginEvent<any, TimerSettings>): Promise<void> {
+  private async handleGlobalSettings(
+    ev: SendToPluginEvent<TimerPluginPayload, TimerSettings>
+  ): Promise<void> {
     const { apiKey } = ev.payload;
     const currentSettings = await ev.action.getSettings();
 
@@ -158,7 +166,6 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       streamDeck.logger.error('Error fetching Moneybird data:', {
         message: (fetchError as Error).message,
         stack: (fetchError as Error).stack,
-        response: (fetchError as any).response?.data,
       });
 
       const clearedSettings = {
@@ -176,7 +183,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     const settings = ev.payload.settings;
     const instanceId = ev.action.id;
 
-    streamDeck.logger.debug(`Action appeared with settings for instance ${instanceId}:`, settings);
+    streamDeck.logger.debug(`Action appeared for instance ${instanceId}`);
 
     if (settings.isRunning && settings.startTime) {
       await this.updateTimerDisplay(ev);
@@ -227,7 +234,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     const settings = ev.payload.settings;
     const instanceId = ev.action.id;
 
-    streamDeck.logger.debug(`Key pressed for instance ${instanceId} with settings:`, settings);
+    streamDeck.logger.debug(`Key pressed for instance ${instanceId}`);
 
     if (!settings.apiKey || !settings.administrationId || !settings.projectId || !settings.userId) {
       streamDeck.logger.debug('Missing required settings');
@@ -305,7 +312,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
           this.autoStopTimeouts.delete(instanceId);
         }
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       streamDeck.logger.error(`Error managing timer for instance ${instanceId}:`, error);
 
       await ev.action.setImage(this.getImagePath('error'));
@@ -340,10 +347,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     const instanceId = ev.action.id;
     const settings = ev.payload.settings;
 
-    streamDeck.logger.debug(
-      'Starting update interval with settings:',
-      JSON.stringify(settings, null, 2)
-    );
+    streamDeck.logger.debug(`Starting update interval for instance ${instanceId}`);
 
     if (!settings || !settings.isRunning || !settings.startTime) {
       streamDeck.logger.debug('Not starting interval - conditions not met');

@@ -20,6 +20,17 @@ import {
 } from 'date-fns';
 import path from 'path';
 
+type InvoicePluginPayload = {
+  event?: 'setGlobalSettings' | 'administrationSelected';
+  apiKey?: string;
+  administrationId?: string;
+};
+
+type SummaryAction = {
+  setTitle(title: string): Promise<void>;
+  setImage(image: string): Promise<void>;
+};
+
 @action({ UUID: 'com.johan-kuijt.moneybird-timer.invoice-summary' })
 export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
   private updateInterval?: NodeJS.Timeout;
@@ -113,15 +124,11 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
     }
   }
 
-  private async updateSummary(
-    ev: WillAppearEvent<InvoiceSettings> | DidReceiveSettingsEvent<InvoiceSettings>
-  ): Promise<void> {
-    const settings = ev.payload.settings;
-
+  private async updateSummary(action: SummaryAction, settings: InvoiceSettings): Promise<void> {
     if (!settings.apiKey || !settings.administrationId || !settings.contactId) {
       const displayTitle = settings.displayTitle || 'Not configured';
-      await ev.action.setTitle(displayTitle);
-      await ev.action.setImage(this.getImagePath('default'));
+      await action.setTitle(displayTitle);
+      await action.setImage(this.getImagePath('default'));
       return;
     }
 
@@ -138,8 +145,8 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
 
       if (timeEntries.length === 0) {
         const displayTitle = settings.displayTitle || this.getPeriodLabel(settings);
-        await ev.action.setTitle(`${displayTitle}\nNo hours`);
-        await ev.action.setImage(this.getImagePath('default'));
+        await action.setTitle(`${displayTitle}\nNo hours`);
+        await action.setImage(this.getImagePath('default'));
         return;
       }
 
@@ -165,22 +172,22 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
         displayText += ` = €${totalAmount.toFixed(0)}`;
       }
 
-      await ev.action.setTitle(displayText);
-      await ev.action.setImage(this.getImagePath('preview'));
+      await action.setTitle(displayText);
+      await action.setImage(this.getImagePath('preview'));
     } catch (error) {
       streamDeck.logger.error('Error fetching summary data:', error);
       const displayTitle = settings.displayTitle || this.getPeriodLabel(settings);
-      await ev.action.setTitle(`${displayTitle}\nError`);
-      await ev.action.setImage(this.getImagePath('error'));
+      await action.setTitle(`${displayTitle}\nError`);
+      await action.setImage(this.getImagePath('error'));
     }
   }
 
   override async onWillAppear(ev: WillAppearEvent<InvoiceSettings>): Promise<void> {
-    await this.updateSummary(ev);
+    await this.updateSummary(ev.action, ev.payload.settings);
 
     // Update every 30 seconds
     this.updateInterval = setInterval(() => {
-      this.updateSummary(ev);
+      this.updateSummary(ev.action, ev.payload.settings);
     }, 30000);
   }
 
@@ -193,19 +200,20 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
 
   override async onKeyDown(ev: KeyDownEvent<InvoiceSettings>): Promise<void> {
     // Refresh on press
-    await this.updateSummary(ev as any);
+    await this.updateSummary(ev.action, ev.payload.settings);
   }
 
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<InvoiceSettings>): Promise<void> {
-    streamDeck.logger.debug(`[InvoiceSummary] Settings received:`, ev.payload.settings);
-    await this.updateSummary(ev);
+    streamDeck.logger.debug('[InvoiceSummary] Settings received');
+    await this.updateSummary(ev.action, ev.payload.settings);
   }
 
-  override async onSendToPlugin(ev: SendToPluginEvent<any, InvoiceSettings>): Promise<void> {
+  override async onSendToPlugin(
+    ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
+  ): Promise<void> {
     try {
       streamDeck.logger.debug(
-        'Invoice summary received SendToPlugin message:',
-        JSON.stringify(ev.payload, null, 2)
+        `Invoice summary received SendToPlugin event: ${ev.payload?.event || 'unknown'}`
       );
 
       if (ev.payload?.event === 'setGlobalSettings') {
@@ -222,7 +230,7 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
   }
 
   private async handleAdministrationChange(
-    ev: SendToPluginEvent<any, InvoiceSettings>
+    ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
   ): Promise<void> {
     const { administrationId } = ev.payload;
     const currentSettings = await ev.action.getSettings();
@@ -261,17 +269,18 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
       streamDeck.logger.debug('Settings saved with new data');
 
       // Update summary after loading new data
-      await this.updateSummary(ev as any);
+      await this.updateSummary(ev.action, newSettings);
     } catch (fetchError) {
       streamDeck.logger.error('Error fetching Moneybird data:', {
         message: (fetchError as Error).message,
         stack: (fetchError as Error).stack,
-        response: (fetchError as any).response?.data,
       });
     }
   }
 
-  private async handleGlobalSettings(ev: SendToPluginEvent<any, InvoiceSettings>): Promise<void> {
+  private async handleGlobalSettings(
+    ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
+  ): Promise<void> {
     const { apiKey } = ev.payload;
     const currentSettings = await ev.action.getSettings();
 
@@ -301,7 +310,6 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
       streamDeck.logger.error('Error fetching Moneybird data:', {
         message: (fetchError as Error).message,
         stack: (fetchError as Error).stack,
-        response: (fetchError as any).response?.data,
       });
 
       const clearedSettings = {

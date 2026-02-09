@@ -21,7 +21,6 @@
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-terser": "^0.4.4",
     "@rollup/plugin-typescript": "^12.3.0",
-    "@tsconfig/node20": "^20.1.9",
     "@types/node": "~25.2.2",
     "archiver": "^7.0.1",
     "eslint": "^9.39.2",
@@ -37,5 +36,9 @@
     "@elgato/streamdeck": "^2.0.1",
     "axios": "^1.13.5",
     "date-fns": "^4.1.0"
-  }
+  },
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "packageManager": "yarn@1.22.22+sha1.ac34549e6aa8e7ead463a7407e1c7390f61a6610"
 }

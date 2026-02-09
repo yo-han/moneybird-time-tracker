@@ -341,7 +341,6 @@
                     // Function to handle administration changes
                     const handleAdminChange = (newValue) => {
                         if (newValue !== lastValue) {
-                            console.log('Administration changed from', lastValue, 'to:', newValue);
                             lastValue = newValue;
                             loadAdministrationData(newValue);
                         }
@@ -381,7 +380,6 @@
         streamDeckClient.didReceiveSettings.subscribe(async event => {
             try {
                 const settings = event?.payload?.settings || {};
-                console.log('Received settings:', settings);
                 
                 currentSettings = settings;
                 
@@ -401,7 +399,6 @@
                             
                             // If this is a new administration selection (no projects loaded yet), load the data
                             if (!settings.projects || Object.keys(settings.projects).length === 0) {
-                                console.log('Administration set but no projects, loading data...');
                                 setTimeout(() => {
                                     loadAdministrationData(settings.administrationId);
                                 }, 200);
@@ -435,7 +432,6 @@
                 
                 initializeEventListeners();
                 
-                console.log('Connected to Stream Deck');
             } catch (error) {
                 console.error('Error connecting to Stream Deck:', error);
             }
