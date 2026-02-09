@@ -28,6 +28,7 @@ type TimerPluginPayload = {
 export class TimeTracker extends SingletonAction<TimerSettings> {
   private updateIntervals: Map<string, NodeJS.Timeout> = new Map();
   private autoStopTimeouts: Map<string, NodeJS.Timeout> = new Map();
+  private autoStopResetTimeouts: Map<string, NodeJS.Timeout> = new Map();
 
   private getImagePath(type: 'default' | 'active' | 'error'): string {
     const baseDir = 'imgs/actions/timer';
@@ -228,6 +229,12 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       clearTimeout(timeout);
       this.autoStopTimeouts.delete(instanceId);
     }
+
+    const resetTimeout = this.autoStopResetTimeouts.get(instanceId);
+    if (resetTimeout) {
+      clearTimeout(resetTimeout);
+      this.autoStopResetTimeouts.delete(instanceId);
+    }
   }
 
   override async onKeyDown(ev: KeyDownEvent<TimerSettings>): Promise<void> {
@@ -311,6 +318,12 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
           clearTimeout(autoStopTimeout);
           this.autoStopTimeouts.delete(instanceId);
         }
+
+        const resetTimeout = this.autoStopResetTimeouts.get(instanceId);
+        if (resetTimeout) {
+          clearTimeout(resetTimeout);
+          this.autoStopResetTimeouts.delete(instanceId);
+        }
       }
     } catch (error: unknown) {
       streamDeck.logger.error(`Error managing timer for instance ${instanceId}:`, error);
@@ -337,6 +350,12 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       if (autoStopTimeout) {
         clearTimeout(autoStopTimeout);
         this.autoStopTimeouts.delete(instanceId);
+      }
+
+      const resetTimeout = this.autoStopResetTimeouts.get(instanceId);
+      if (resetTimeout) {
+        clearTimeout(resetTimeout);
+        this.autoStopResetTimeouts.delete(instanceId);
       }
     }
   }
@@ -435,6 +454,19 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       clearTimeout(existingTimeout);
     }
 
+    const existingResetTimeout = this.autoStopResetTimeouts.get(instanceId);
+    if (existingResetTimeout) {
+      clearTimeout(existingResetTimeout);
+      this.autoStopResetTimeouts.delete(instanceId);
+    }
+
+    if (!Number.isFinite(hours) || hours <= 0) {
+      streamDeck.logger.warn(
+        `Skipping auto-stop for instance ${instanceId}: invalid hours ${hours}`
+      );
+      return;
+    }
+
     // Set new timeout
     const milliseconds = hours * 60 * 60 * 1000;
     streamDeck.logger.debug(`Setting auto-stop for instance ${instanceId} after ${hours} hours`);
@@ -475,10 +507,13 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
           );
 
           // Reset title after 3 seconds
-          setTimeout(async () => {
+          const resetTimeout = setTimeout(async () => {
             const title = settings.displayTitle || 'Start';
             await ev.action.setTitle(String(title));
+            this.autoStopResetTimeouts.delete(instanceId);
           }, 3000);
+
+          this.autoStopResetTimeouts.set(instanceId, resetTimeout);
         }
       } catch (error) {
         streamDeck.logger.error(`Error during auto-stop for instance ${instanceId}:`, error);
