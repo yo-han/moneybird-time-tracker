@@ -8,6 +8,7 @@ import {
   startOfYear,
   subMonths,
 } from 'date-fns';
+import { calculateEntryDurationHours } from './time-entry-utils.js';
 
 export type InvoicePeriodType = 'month' | 'quarter' | 'year';
 export type InvoicePeriodRange = 'current' | 'last';
@@ -128,13 +129,6 @@ export function parseHourlyRate(hourlyRate: number | string | undefined, fallbac
 
 export function calculateTotalHours(timeEntries: TimeEntryLike[]): number {
   return timeEntries.reduce((total, entry) => {
-    if (!entry.ended_at) {
-      return total;
-    }
-
-    const startTime = new Date(entry.started_at);
-    const endTime = new Date(entry.ended_at);
-    const durationMs = endTime.getTime() - startTime.getTime() - entry.paused_duration * 1000;
-    return total + durationMs / (1000 * 60 * 60);
+    return total + calculateEntryDurationHours(entry);
   }, 0);
 }

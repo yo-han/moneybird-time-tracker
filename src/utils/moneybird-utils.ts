@@ -1,4 +1,5 @@
 import type { MoneybirdTimeEntry } from '../types/moneybird.js';
+import { calculateEntryDurationHours } from './time-entry-utils.js';
 
 type GroupedTimeEntries = {
   description: string;
@@ -43,10 +44,7 @@ export function groupTimeEntriesByDescription(
       });
     }
 
-    const startTime = new Date(entry.started_at);
-    const endTime = new Date(entry.ended_at);
-    const durationMs = endTime.getTime() - startTime.getTime() - entry.paused_duration * 1000;
-    const hours = durationMs / (1000 * 60 * 60);
+    const hours = calculateEntryDurationHours(entry);
 
     const group = groups.get(key);
     if (!group) {
