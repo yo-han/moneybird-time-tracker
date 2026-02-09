@@ -17,6 +17,7 @@ import {
 } from '../types/moneybird';
 import { differenceInSeconds, differenceInMinutes, differenceInHours } from 'date-fns';
 import path from 'path';
+import { calculateRemainingAutoStopHours, normalizeAutoStopHours } from '../utils/auto-stop-utils';
 
 type TimerPluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -191,18 +192,11 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       this.startUpdateInterval(ev);
 
       // Set up auto-stop if enabled and timer is running
-      if (settings.autoStopEnabled && settings.autoStopHours) {
-        // Calculate remaining time
-        const startDate = new Date(settings.startTime);
-        const now = new Date();
-        const elapsedHours = (now.getTime() - startDate.getTime()) / (1000 * 60 * 60);
-        const remainingHours = settings.autoStopHours - elapsedHours;
-
-        if (remainingHours > 0) {
-          this.setupAutoStop(instanceId, remainingHours, ev);
-        } else {
-          // Timer should have already stopped, trigger auto-stop now
-          this.setupAutoStop(instanceId, 0.001, ev); // Trigger almost immediately
+      if (settings.autoStopEnabled) {
+        const autoStopHours = normalizeAutoStopHours(settings.autoStopHours);
+        if (autoStopHours !== null) {
+          const remainingHours = calculateRemainingAutoStopHours(settings.startTime, autoStopHours);
+          this.setupAutoStop(instanceId, Math.max(remainingHours, 0.001), ev);
         }
       }
     } else {
@@ -278,8 +272,11 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         this.startUpdateInterval(updatedEvent);
 
         // Set up auto-stop if enabled
-        if (settings.autoStopEnabled && settings.autoStopHours) {
-          this.setupAutoStop(instanceId, settings.autoStopHours, updatedEvent);
+        if (settings.autoStopEnabled) {
+          const autoStopHours = normalizeAutoStopHours(settings.autoStopHours);
+          if (autoStopHours !== null) {
+            this.setupAutoStop(instanceId, autoStopHours, updatedEvent);
+          }
         }
 
         streamDeck.logger.debug(`Timer started successfully for instance ${instanceId}`);
@@ -419,13 +416,16 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       const imagePath = this.getImagePath('active');
 
       // Check if we're approaching auto-stop time
-      if (settings.autoStopEnabled && settings.autoStopHours) {
-        const elapsedHours = totalSeconds / 3600;
-        const remainingMinutes = (settings.autoStopHours - elapsedHours) * 60;
+      if (settings.autoStopEnabled) {
+        const autoStopHours = normalizeAutoStopHours(settings.autoStopHours);
+        if (autoStopHours !== null) {
+          const elapsedHours = totalSeconds / 3600;
+          const remainingMinutes = (autoStopHours - elapsedHours) * 60;
 
-        if (remainingMinutes <= 5 && remainingMinutes > 0) {
-          // Show warning in last 5 minutes
-          displayTime = `⚠️ ${displayTime}`;
+          if (remainingMinutes <= 5 && remainingMinutes > 0) {
+            // Show warning in last 5 minutes
+            displayTime = `⚠️ ${displayTime}`;
+          }
         }
       }
 
