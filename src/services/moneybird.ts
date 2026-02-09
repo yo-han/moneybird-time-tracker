@@ -51,7 +51,7 @@ export class MoneybirdService {
       });
     } else if (error.request) {
       errorMessage = 'No response received from Moneybird API. Check your internet connection.';
-      streamDeck.logger.error('No response from Moneybird API:', error.request);
+      streamDeck.logger.error('No response from Moneybird API');
     } else {
       errorMessage = `Request setup error: ${error.message}`;
       streamDeck.logger.error('Moneybird API Request Error:', error.message);
@@ -187,11 +187,7 @@ export class MoneybirdService {
       return response.data;
     } catch (error: unknown) {
       const axiosError = error as AxiosError;
-      streamDeck.logger.error('Moneybird API error:', {
-        message: axiosError.message,
-        status: axiosError.response?.status,
-      });
-      throw error;
+      return this.handleAxiosError(axiosError);
     }
   }
 
@@ -219,11 +215,7 @@ export class MoneybirdService {
       return response.data;
     } catch (error: unknown) {
       const axiosError = error as AxiosError;
-      streamDeck.logger.error('Moneybird API error in stopTimer:', {
-        message: axiosError.message,
-        status: axiosError.response?.status,
-      });
-      throw error;
+      return this.handleAxiosError(axiosError);
     }
   }
 
