@@ -44,14 +44,13 @@ async function packagePlugin() {
     execSync('npm run build', { stdio: 'inherit', cwd: projectRoot });
     console.log('✅ Build completed\n');
 
-    // Step 3: Validate plugin
+    // Step 3: Validate plugin (fail fast if invalid)
     console.log('🔍 Validating plugin...');
-    try {
-      execSync(`npx --no-install streamdeck validate "${pluginPath}"`, { stdio: 'inherit', cwd: projectRoot });
-      console.log('✅ Plugin validation passed\n');
-    } catch (error) {
-      console.error('❌ Plugin validation failed. Continuing anyway...\n');
-    }
+    execSync(`npx --no-install streamdeck validate "${pluginPath}"`, {
+      stdio: 'inherit',
+      cwd: projectRoot,
+    });
+    console.log('✅ Plugin validation passed\n');
 
     // Step 4: Create .streamDeckPlugin file
     console.log('📦 Creating .streamDeckPlugin file...');

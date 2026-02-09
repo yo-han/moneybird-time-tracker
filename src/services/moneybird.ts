@@ -25,6 +25,7 @@ import {
   mapProjects,
   mapUsers,
 } from './moneybird/response-mappers.js';
+import { logError } from '../utils/error-logging.js';
 import type {
   MoneybirdHttpClient,
   MoneybirdLogger,
@@ -274,7 +275,10 @@ export class MoneybirdService {
       await Promise.all(updatePromises);
       this.logger.debug(`Linked ${timeEntries.length} time entries to invoice ${invoiceId}`);
     } catch (error) {
-      this.logger.error('Error linking time entries to invoice', error);
+      logError(this.logger, 'Error linking time entries to invoice', error, {
+        invoiceId,
+        entryCount: timeEntries.length,
+      });
       // Don't throw here, the invoice is already created
     }
   }
