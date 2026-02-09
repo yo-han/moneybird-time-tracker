@@ -12,7 +12,7 @@
     "bump-version": "node scripts/bump-version.js",
     "package": "node scripts/package-plugin.js",
     "package:no-bump": "node scripts/package-plugin.js --no-bump",
-    "release": "npm run lint && npm run typecheck && npm run build && npm run package"
+    "release": "npm run lint && npm run typecheck && npm run test && npm run build && npm run package"
   },
   "type": "module",
   "devDependencies": {
