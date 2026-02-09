@@ -37,6 +37,32 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     return path.join(baseDir, imageName);
   }
 
+  private clearMapTimer(map: Map<string, NodeJS.Timeout>, instanceId: string): void {
+    const timer = map.get(instanceId);
+    if (!timer) {
+      return;
+    }
+
+    clearTimeout(timer);
+    map.delete(instanceId);
+  }
+
+  private clearMapInterval(map: Map<string, NodeJS.Timeout>, instanceId: string): void {
+    const interval = map.get(instanceId);
+    if (!interval) {
+      return;
+    }
+
+    clearInterval(interval);
+    map.delete(instanceId);
+  }
+
+  private clearInstanceRuntime(instanceId: string): void {
+    this.clearMapInterval(this.updateIntervals, instanceId);
+    this.clearMapTimer(this.autoStopTimeouts, instanceId);
+    this.clearMapTimer(this.autoStopResetTimeouts, instanceId);
+  }
+
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<TimerSettings>): Promise<void> {
     try {
       const settings = ev.payload.settings;
@@ -209,26 +235,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
   override async onWillDisappear(ev: WillDisappearEvent<TimerSettings>): Promise<void> {
     const instanceId = ev.action.id;
-
-    // Clear update interval
-    const interval = this.updateIntervals.get(instanceId);
-    if (interval) {
-      clearInterval(interval);
-      this.updateIntervals.delete(instanceId);
-    }
-
-    // Clear auto-stop timeout
-    const timeout = this.autoStopTimeouts.get(instanceId);
-    if (timeout) {
-      clearTimeout(timeout);
-      this.autoStopTimeouts.delete(instanceId);
-    }
-
-    const resetTimeout = this.autoStopResetTimeouts.get(instanceId);
-    if (resetTimeout) {
-      clearTimeout(resetTimeout);
-      this.autoStopResetTimeouts.delete(instanceId);
-    }
+    this.clearInstanceRuntime(instanceId);
   }
 
   override async onKeyDown(ev: KeyDownEvent<TimerSettings>): Promise<void> {
@@ -302,25 +309,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
         const title = settings.displayTitle ? settings.displayTitle : 'Start';
         await ev.action.setTitle(String(title));
-
-        const interval = this.updateIntervals.get(instanceId);
-        if (interval) {
-          clearInterval(interval);
-          this.updateIntervals.delete(instanceId);
-        }
-
-        // Clear auto-stop timeout
-        const autoStopTimeout = this.autoStopTimeouts.get(instanceId);
-        if (autoStopTimeout) {
-          clearTimeout(autoStopTimeout);
-          this.autoStopTimeouts.delete(instanceId);
-        }
-
-        const resetTimeout = this.autoStopResetTimeouts.get(instanceId);
-        if (resetTimeout) {
-          clearTimeout(resetTimeout);
-          this.autoStopResetTimeouts.delete(instanceId);
-        }
+        this.clearInstanceRuntime(instanceId);
       }
     } catch (error: unknown) {
       streamDeck.logger.error(`Error managing timer for instance ${instanceId}:`, error);
@@ -335,25 +324,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         timeEntryId: undefined,
       };
       await ev.action.setSettings(newSettings);
-
-      const interval = this.updateIntervals.get(instanceId);
-      if (interval) {
-        clearInterval(interval);
-        this.updateIntervals.delete(instanceId);
-      }
-
-      // Clear auto-stop timeout on error
-      const autoStopTimeout = this.autoStopTimeouts.get(instanceId);
-      if (autoStopTimeout) {
-        clearTimeout(autoStopTimeout);
-        this.autoStopTimeouts.delete(instanceId);
-      }
-
-      const resetTimeout = this.autoStopResetTimeouts.get(instanceId);
-      if (resetTimeout) {
-        clearTimeout(resetTimeout);
-        this.autoStopResetTimeouts.delete(instanceId);
-      }
+      this.clearInstanceRuntime(instanceId);
     }
   }
 
@@ -449,16 +420,8 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     ev: WillAppearEvent<TimerSettings> | KeyDownEvent<TimerSettings>
   ): void {
     // Clear any existing timeout
-    const existingTimeout = this.autoStopTimeouts.get(instanceId);
-    if (existingTimeout) {
-      clearTimeout(existingTimeout);
-    }
-
-    const existingResetTimeout = this.autoStopResetTimeouts.get(instanceId);
-    if (existingResetTimeout) {
-      clearTimeout(existingResetTimeout);
-      this.autoStopResetTimeouts.delete(instanceId);
-    }
+    this.clearMapTimer(this.autoStopTimeouts, instanceId);
+    this.clearMapTimer(this.autoStopResetTimeouts, instanceId);
 
     if (!Number.isFinite(hours) || hours <= 0) {
       streamDeck.logger.warn(
@@ -495,11 +458,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
           await ev.action.setTitle('Auto-stopped');
 
           // Clear intervals
-          const interval = this.updateIntervals.get(instanceId);
-          if (interval) {
-            clearInterval(interval);
-            this.updateIntervals.delete(instanceId);
-          }
+          this.clearMapInterval(this.updateIntervals, instanceId);
 
           // Show notification
           streamDeck.logger.info(
