@@ -55,9 +55,14 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     }
 
     const timeout = setTimeout(async () => {
-      await action.setTitle(this.getDefaultTitle(settings));
-      await action.setImage(this.getImagePath('default'));
-      this.resetDisplayTimeouts.delete(instanceId);
+      try {
+        await action.setTitle(this.getDefaultTitle(settings));
+        await action.setImage(this.getImagePath('default'));
+      } catch (error) {
+        streamDeck.logger.error('Failed to reset invoice creator display:', error);
+      } finally {
+        this.resetDisplayTimeouts.delete(instanceId);
+      }
     }, delayMs);
 
     this.resetDisplayTimeouts.set(instanceId, timeout);
@@ -328,8 +333,13 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
 
     // Reset image after a short delay
     const timeout = setTimeout(async () => {
-      await ev.action.setImage(this.getImagePath('default'));
-      this.periodCycleTimeouts.delete(instanceId);
+      try {
+        await ev.action.setImage(this.getImagePath('default'));
+      } catch (error) {
+        streamDeck.logger.error('Failed to reset invoice creator cycle image:', error);
+      } finally {
+        this.periodCycleTimeouts.delete(instanceId);
+      }
     }, 1000);
     this.periodCycleTimeouts.set(instanceId, timeout);
   }
