@@ -11,6 +11,7 @@ import {
   MoneybirdSalesInvoice,
 } from '../types/moneybird';
 import { format } from 'date-fns';
+import { formatMoneybirdDate, groupTimeEntriesByDescription } from '../utils/moneybird-utils';
 
 export class MoneybirdService {
   private baseUrl = 'https://moneybird.com/api/v2';
@@ -150,22 +151,6 @@ export class MoneybirdService {
     }
   }
 
-  private formatDate(date: Date): string {
-    const pad = (num: number) => num.toString().padStart(2, '0');
-
-    const year = date.getFullYear();
-    const month = pad(date.getMonth() + 1);
-    const day = pad(date.getDate());
-    const hours = pad(date.getHours());
-    const minutes = pad(date.getMinutes());
-    const offset = -date.getTimezoneOffset();
-    const offsetHours = Math.floor(Math.abs(offset) / 60);
-    const offsetMinutes = Math.abs(offset) % 60;
-    const offsetSign = offset >= 0 ? '+' : '-';
-
-    return `${year}-${month}-${day} ${hours}:${minutes}:00 ${offsetSign}${pad(offsetHours)}:${pad(offsetMinutes)}`;
-  }
-
   async startTimer(settings: TimerSettings): Promise<TimeEntry> {
     try {
       let billable = settings.billable;
@@ -177,7 +162,7 @@ export class MoneybirdService {
 
       const timeEntry = {
         time_entry: {
-          started_at: this.formatDate(new Date()),
+          started_at: formatMoneybirdDate(new Date()),
           user_id: settings.userId,
           project_id: settings.projectId,
           contact_id: settings.contactId || null,
@@ -214,7 +199,7 @@ export class MoneybirdService {
     try {
       const timeEntry = {
         time_entry: {
-          ended_at: this.formatDate(new Date()),
+          ended_at: formatMoneybirdDate(new Date()),
         },
       };
 
@@ -296,7 +281,7 @@ export class MoneybirdService {
       }
 
       // Group time entries by project and description
-      const groupedEntries = this.groupTimeEntries(timeEntries);
+      const groupedEntries = groupTimeEntriesByDescription(timeEntries);
 
       // Create invoice details from grouped entries
       const details_attributes = groupedEntries.map((group, index) => ({
@@ -334,43 +319,6 @@ export class MoneybirdService {
     } catch (error) {
       return this.handleAxiosError(error as AxiosError);
     }
-  }
-
-  private groupTimeEntries(timeEntries: MoneybirdTimeEntry[]): Array<{
-    description: string;
-    totalHours: number;
-    entries: MoneybirdTimeEntry[];
-  }> {
-    const groups: Record<
-      string,
-      {
-        description: string;
-        totalHours: number;
-        entries: MoneybirdTimeEntry[];
-      }
-    > = {};
-
-    timeEntries.forEach(entry => {
-      const key = entry.description || 'Werkzaamheden';
-
-      if (!groups[key]) {
-        groups[key] = {
-          description: key,
-          totalHours: 0,
-          entries: [],
-        };
-      }
-
-      const startTime = new Date(entry.started_at);
-      const endTime = new Date(entry.ended_at);
-      const durationMs = endTime.getTime() - startTime.getTime() - entry.paused_duration * 1000;
-      const hours = durationMs / (1000 * 60 * 60);
-
-      groups[key].totalHours += hours;
-      groups[key].entries.push(entry);
-    });
-
-    return Object.values(groups);
   }
 
   private async linkTimeEntriesToInvoice(
