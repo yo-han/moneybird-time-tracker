@@ -21,6 +21,7 @@ import {
   applyInvoiceAdministrationChange,
   applyInvoiceGlobalSettings,
 } from '../utils/invoice-action-settings';
+import { clearIntervalForKey } from '../utils/runtime-timers';
 
 type InvoicePluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -121,11 +122,7 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
 
   override async onWillDisappear(ev: WillDisappearEvent<InvoiceSettings>): Promise<void> {
     const instanceId = ev.action.id;
-    const interval = this.updateIntervals.get(instanceId);
-    if (interval) {
-      clearInterval(interval);
-      this.updateIntervals.delete(instanceId);
-    }
+    clearIntervalForKey(this.updateIntervals, instanceId);
   }
 
   override async onKeyDown(ev: KeyDownEvent<InvoiceSettings>): Promise<void> {

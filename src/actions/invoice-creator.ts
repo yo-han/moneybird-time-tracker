@@ -21,6 +21,7 @@ import {
   applyInvoiceAdministrationChange,
   applyInvoiceGlobalSettings,
 } from '../utils/invoice-action-settings';
+import { clearTimeoutForKey } from '../utils/runtime-timers';
 
 type InvoicePluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -70,16 +71,6 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     }, delayMs);
 
     this.resetDisplayTimeouts.set(instanceId, timeout);
-  }
-
-  private clearMapTimer(map: Map<string, NodeJS.Timeout>, instanceId: string): void {
-    const timer = map.get(instanceId);
-    if (!timer) {
-      return;
-    }
-
-    clearTimeout(timer);
-    map.delete(instanceId);
   }
 
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<InvoiceSettings>): Promise<void> {
@@ -170,9 +161,9 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
   override async onWillDisappear(ev: WillDisappearEvent<InvoiceSettings>): Promise<void> {
     const instanceId = ev.action.id;
 
-    this.clearMapTimer(this.longPressTimers, instanceId);
-    this.clearMapTimer(this.periodCycleTimeouts, instanceId);
-    this.clearMapTimer(this.resetDisplayTimeouts, instanceId);
+    clearTimeoutForKey(this.longPressTimers, instanceId);
+    clearTimeoutForKey(this.periodCycleTimeouts, instanceId);
+    clearTimeoutForKey(this.resetDisplayTimeouts, instanceId);
 
     this.longPressTriggered.delete(instanceId);
   }
@@ -191,7 +182,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     }
 
     // Set up long press detection
-    this.clearMapTimer(this.longPressTimers, instanceId);
+    clearTimeoutForKey(this.longPressTimers, instanceId);
 
     this.longPressTriggered.delete(instanceId);
     const longPressTimeout = setTimeout(() => {
@@ -205,7 +196,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     const instanceId = ev.action.id;
 
     // Clear the long press timer
-    this.clearMapTimer(this.longPressTimers, instanceId);
+    clearTimeoutForKey(this.longPressTimers, instanceId);
 
     // If it was a long press, we already handled it
     if (this.longPressTriggered.has(instanceId)) {
@@ -245,7 +236,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     await ev.action.setImage(this.getImagePath('success'));
 
     // Clear any existing timeout
-    this.clearMapTimer(this.periodCycleTimeouts, instanceId);
+    clearTimeoutForKey(this.periodCycleTimeouts, instanceId);
 
     // Reset image after a short delay
     const timeout = setTimeout(async () => {

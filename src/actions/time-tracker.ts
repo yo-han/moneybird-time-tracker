@@ -18,6 +18,7 @@ import {
 import { differenceInSeconds, differenceInMinutes, differenceInHours } from 'date-fns';
 import path from 'path';
 import { calculateRemainingAutoStopHours, normalizeAutoStopHours } from '../utils/auto-stop-utils';
+import { clearIntervalForKey, clearTimeoutForKey } from '../utils/runtime-timers';
 
 type TimerPluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -37,30 +38,10 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     return path.join(baseDir, imageName);
   }
 
-  private clearMapTimer(map: Map<string, NodeJS.Timeout>, instanceId: string): void {
-    const timer = map.get(instanceId);
-    if (!timer) {
-      return;
-    }
-
-    clearTimeout(timer);
-    map.delete(instanceId);
-  }
-
-  private clearMapInterval(map: Map<string, NodeJS.Timeout>, instanceId: string): void {
-    const interval = map.get(instanceId);
-    if (!interval) {
-      return;
-    }
-
-    clearInterval(interval);
-    map.delete(instanceId);
-  }
-
   private clearInstanceRuntime(instanceId: string): void {
-    this.clearMapInterval(this.updateIntervals, instanceId);
-    this.clearMapTimer(this.autoStopTimeouts, instanceId);
-    this.clearMapTimer(this.autoStopResetTimeouts, instanceId);
+    clearIntervalForKey(this.updateIntervals, instanceId);
+    clearTimeoutForKey(this.autoStopTimeouts, instanceId);
+    clearTimeoutForKey(this.autoStopResetTimeouts, instanceId);
   }
 
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<TimerSettings>): Promise<void> {
@@ -420,8 +401,8 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     ev: WillAppearEvent<TimerSettings> | KeyDownEvent<TimerSettings>
   ): void {
     // Clear any existing timeout
-    this.clearMapTimer(this.autoStopTimeouts, instanceId);
-    this.clearMapTimer(this.autoStopResetTimeouts, instanceId);
+    clearTimeoutForKey(this.autoStopTimeouts, instanceId);
+    clearTimeoutForKey(this.autoStopResetTimeouts, instanceId);
 
     if (!Number.isFinite(hours) || hours <= 0) {
       streamDeck.logger.warn(
@@ -458,7 +439,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
           await ev.action.setTitle('Auto-stopped');
 
           // Clear intervals
-          this.clearMapInterval(this.updateIntervals, instanceId);
+          clearIntervalForKey(this.updateIntervals, instanceId);
 
           // Show notification
           streamDeck.logger.info(
