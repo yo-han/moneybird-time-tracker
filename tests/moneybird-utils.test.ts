@@ -65,3 +65,39 @@ test('groupTimeEntriesByDescription groups entries and sums hours', () => {
   assert.equal(defaultGroup.entries.length, 1);
   assert.equal(defaultGroup.totalHours, 1);
 });
+
+test('groupTimeEntriesByDescription safely handles special object-key names', () => {
+  const entries: MoneybirdTimeEntry[] = [
+    {
+      id: '1',
+      started_at: '2026-02-01T10:00:00.000Z',
+      ended_at: '2026-02-01T11:00:00.000Z',
+      description: '__proto__',
+      billable: true,
+      user_id: 'u1',
+      contact_id: 'c1',
+      project_id: 'p1',
+      paused_duration: 0,
+      created_at: '2026-02-01T11:00:00.000Z',
+      updated_at: '2026-02-01T11:00:00.000Z',
+    },
+    {
+      id: '2',
+      started_at: '2026-02-01T11:00:00.000Z',
+      ended_at: '2026-02-01T12:00:00.000Z',
+      description: 'constructor',
+      billable: true,
+      user_id: 'u1',
+      contact_id: 'c1',
+      project_id: 'p1',
+      paused_duration: 0,
+      created_at: '2026-02-01T12:00:00.000Z',
+      updated_at: '2026-02-01T12:00:00.000Z',
+    },
+  ];
+
+  const grouped = groupTimeEntriesByDescription(entries);
+  assert.equal(grouped.length, 2);
+  assert.ok(grouped.find(group => group.description === '__proto__'));
+  assert.ok(grouped.find(group => group.description === 'constructor'));
+});

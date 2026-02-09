@@ -25,17 +25,18 @@ export function formatMoneybirdDate(date: Date): string {
 export function groupTimeEntriesByDescription(
   timeEntries: MoneybirdTimeEntry[]
 ): GroupedTimeEntries[] {
-  const groups: Record<string, GroupedTimeEntries> = {};
+  const groups = new Map<string, GroupedTimeEntries>();
 
   for (const entry of timeEntries) {
     const key = entry.description || 'Werkzaamheden';
+    const existing = groups.get(key);
 
-    if (!groups[key]) {
-      groups[key] = {
+    if (!existing) {
+      groups.set(key, {
         description: key,
         totalHours: 0,
         entries: [],
-      };
+      });
     }
 
     const startTime = new Date(entry.started_at);
@@ -43,9 +44,13 @@ export function groupTimeEntriesByDescription(
     const durationMs = endTime.getTime() - startTime.getTime() - entry.paused_duration * 1000;
     const hours = durationMs / (1000 * 60 * 60);
 
-    groups[key].totalHours += hours;
-    groups[key].entries.push(entry);
+    const group = groups.get(key);
+    if (!group) {
+      continue;
+    }
+    group.totalHours += hours;
+    group.entries.push(entry);
   }
 
-  return Object.values(groups);
+  return Array.from(groups.values());
 }
