@@ -5,6 +5,7 @@
     "watch": "rollup -c -w --watch.onEnd=\"streamdeck restart com.johan-kuijt.moneybird-timer\"",
     "lint": "eslint \"src/**/*.ts\"",
     "lint:fix": "eslint \"src/**/*.ts\" --fix",
+    "test": "tsc -p tsconfig.test.json && node --test .tmp-tests/tests/**/*.test.js",
     "format": "prettier --write \"src/**/*.{ts,tsx,json}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,json}\"",
     "bump-version": "node scripts/bump-version.js",

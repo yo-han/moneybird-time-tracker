@@ -8,17 +8,14 @@ import streamDeck, {
 } from '@elgato/streamdeck';
 import { MoneybirdService } from '../services/moneybird';
 import { InvoiceSettings, administrationToJson, contactToJson } from '../types/moneybird';
-import {
-  startOfMonth,
-  endOfMonth,
-  format,
-  subMonths,
-  startOfQuarter,
-  endOfQuarter,
-  startOfYear,
-  endOfYear,
-} from 'date-fns';
 import path from 'path';
+import {
+  calculateTotalHours,
+  getPeriodLabel,
+  getPeriodRange,
+  parseHourlyRate,
+  resolvePeriodKey,
+} from '../utils/invoice-utils';
 
 type InvoicePluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -41,89 +38,6 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
     return path.join(baseDir, imageName);
   }
 
-  private getPeriodKey(settings: InvoiceSettings): string {
-    // Use new format if available
-    if (settings.periodType && settings.periodRange) {
-      const range = settings.periodRange === 'last' ? 'last' : 'current';
-      return `${range}_${settings.periodType}`;
-    }
-    // Fall back to old format
-    return settings.period || 'current_month';
-  }
-
-  private getPeriodDates(settings: InvoiceSettings): {
-    start: Date;
-    end: Date;
-    description: string;
-  } {
-    const now = new Date();
-    const periodKey = this.getPeriodKey(settings);
-
-    switch (periodKey) {
-      case 'last_month': {
-        const lastMonth = subMonths(now, 1);
-        return {
-          start: startOfMonth(lastMonth),
-          end: endOfMonth(lastMonth),
-          description: format(lastMonth, 'MMMM yyyy'),
-        };
-      }
-      case 'current_quarter': {
-        return {
-          start: startOfQuarter(now),
-          end: endOfQuarter(now),
-          description: `Q${Math.floor(now.getMonth() / 3) + 1} ${now.getFullYear()}`,
-        };
-      }
-      case 'last_quarter': {
-        const lastQuarter = subMonths(now, 3);
-        return {
-          start: startOfQuarter(lastQuarter),
-          end: endOfQuarter(lastQuarter),
-          description: `Q${Math.floor(lastQuarter.getMonth() / 3) + 1} ${lastQuarter.getFullYear()}`,
-        };
-      }
-      case 'current_year': {
-        return {
-          start: startOfYear(now),
-          end: endOfYear(now),
-          description: format(now, 'yyyy'),
-        };
-      }
-      case 'last_year': {
-        const lastYear = subMonths(now, 12);
-        return {
-          start: startOfYear(lastYear),
-          end: endOfYear(lastYear),
-          description: format(lastYear, 'yyyy'),
-        };
-      }
-      default: // current_month
-        return {
-          start: startOfMonth(now),
-          end: endOfMonth(now),
-          description: format(now, 'MMMM yyyy'),
-        };
-    }
-  }
-  private getPeriodLabel(settings: InvoiceSettings): string {
-    const periodKey = this.getPeriodKey(settings);
-    switch (periodKey) {
-      case 'last_month':
-        return 'Last Month';
-      case 'current_quarter':
-        return 'This Quarter';
-      case 'last_quarter':
-        return 'Last Quarter';
-      case 'current_year':
-        return 'This Year';
-      case 'last_year':
-        return 'Last Year';
-      default:
-        return 'This Month';
-    }
-  }
-
   private async updateSummary(action: SummaryAction, settings: InvoiceSettings): Promise<void> {
     if (!settings.apiKey || !settings.administrationId || !settings.contactId) {
       const displayTitle = settings.displayTitle || 'Not configured';
@@ -133,38 +47,31 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
     }
 
     const moneybirdService = new MoneybirdService(settings.apiKey, settings.administrationId);
-    const { start, end } = this.getPeriodDates(settings);
+    const periodKey = resolvePeriodKey(settings);
+    const { startDate, endDate } = getPeriodRange(new Date(), periodKey);
 
     try {
       // Fetch time entries
       const timeEntries = await moneybirdService.getTimeEntriesForContact(
         settings.contactId,
-        start,
-        end
+        startDate,
+        endDate
       );
 
       if (timeEntries.length === 0) {
-        const displayTitle = settings.displayTitle || this.getPeriodLabel(settings);
+        const displayTitle = settings.displayTitle || getPeriodLabel(periodKey);
         await action.setTitle(`${displayTitle}\nNo hours`);
         await action.setImage(this.getImagePath('default'));
         return;
       }
 
       // Calculate total hours and amount
-      let totalHours = 0;
-      timeEntries.forEach(entry => {
-        const startTime = new Date(entry.started_at);
-        const endTime = new Date(entry.ended_at);
-        const durationMs = endTime.getTime() - startTime.getTime() - entry.paused_duration * 1000;
-        totalHours += durationMs / (1000 * 60 * 60);
-      });
-
-      const hourlyRateString = String(settings.hourlyRate).replace(',', '.');
-      const hourlyRate = parseFloat(hourlyRateString) || 75;
+      const totalHours = calculateTotalHours(timeEntries);
+      const hourlyRate = parseHourlyRate(settings.hourlyRate, 75);
       const totalAmount = totalHours * hourlyRate;
 
       // Update display based on settings
-      const displayTitle = settings.displayTitle || this.getPeriodLabel(settings);
+      const displayTitle = settings.displayTitle || getPeriodLabel(periodKey);
       let displayText = `${displayTitle}\n${totalHours.toFixed(1)}h`;
 
       // Add price if hourly rate is configured
@@ -176,7 +83,7 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
       await action.setImage(this.getImagePath('preview'));
     } catch (error) {
       streamDeck.logger.error('Error fetching summary data:', error);
-      const displayTitle = settings.displayTitle || this.getPeriodLabel(settings);
+      const displayTitle = settings.displayTitle || getPeriodLabel(periodKey);
       await action.setTitle(`${displayTitle}\nError`);
       await action.setImage(this.getImagePath('error'));
     }

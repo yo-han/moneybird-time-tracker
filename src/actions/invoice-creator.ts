@@ -9,17 +9,13 @@ import streamDeck, {
 } from '@elgato/streamdeck';
 import { MoneybirdService } from '../services/moneybird';
 import { InvoiceSettings, administrationToJson, contactToJson } from '../types/moneybird';
-import {
-  startOfMonth,
-  endOfMonth,
-  format,
-  subMonths,
-  startOfQuarter,
-  endOfQuarter,
-  startOfYear,
-  endOfYear,
-} from 'date-fns';
 import path from 'path';
+import {
+  getPeriodLabel,
+  getPeriodRange,
+  parseHourlyRate,
+  resolvePeriodKey,
+} from '../utils/invoice-utils';
 
 type InvoicePluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -32,31 +28,6 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
   private longPressTimer?: NodeJS.Timeout;
   private isLongPress = false;
   private periodCycleTimeout?: NodeJS.Timeout;
-
-  private periods = [
-    { key: 'current_month', label: 'This Month' },
-    { key: 'last_month', label: 'Last Month' },
-    { key: 'current_quarter', label: 'This Quarter' },
-    { key: 'last_quarter', label: 'Last Quarter' },
-    { key: 'current_year', label: 'This Year' },
-    { key: 'last_year', label: 'Last Year' },
-  ];
-
-  private getPeriodKey(settings: InvoiceSettings): string {
-    // Use new format if available
-    if (settings.periodType && settings.periodRange) {
-      const range = settings.periodRange === 'last' ? 'last' : 'current';
-      return `${range}_${settings.periodType}`;
-    }
-    // Fall back to old format
-    return settings.period || 'current_month';
-  }
-
-  private getPeriodLabel(settings: InvoiceSettings): string {
-    const periodKey = this.getPeriodKey(settings);
-    const period = this.periods.find(p => p.key === periodKey);
-    return period ? period.label : 'This Month';
-  }
 
   private getImagePath(type: 'default' | 'success' | 'error'): string {
     const baseDir = 'imgs/actions/invoice';
@@ -78,7 +49,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       ) {
         // Update title with period info if configured
         if (settings.apiKey && settings.administrationId && settings.contactId) {
-          const periodLabel = this.getPeriodLabel(settings);
+          const periodLabel = getPeriodLabel(resolvePeriodKey(settings));
           const displayTitle = settings.displayTitle || 'Invoice';
           await ev.action.setTitle(`${displayTitle}\n${periodLabel}`);
         } else {
@@ -214,7 +185,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
 
     // Show period in title if configured
     if (settings.apiKey && settings.administrationId && settings.contactId) {
-      const periodLabel = this.getPeriodLabel(settings);
+      const periodLabel = getPeriodLabel(resolvePeriodKey(settings));
       const displayTitle = settings.displayTitle || 'Invoice';
       await ev.action.setTitle(`${displayTitle}\n${periodLabel}`);
     } else {
@@ -281,7 +252,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
 
     // Update display
     const displayTitle = settings.displayTitle || 'Invoice';
-    const periodLabel = this.getPeriodLabel(newSettings);
+    const periodLabel = getPeriodLabel(resolvePeriodKey(newSettings));
     await ev.action.setTitle(`${displayTitle}\n${periodLabel}`);
 
     // Show temporary feedback
@@ -308,53 +279,9 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       // Show processing state
       await ev.action.setTitle('Creating...');
 
-      // Determine period
       const now = new Date();
-      let startDate: Date;
-      let endDate: Date;
-      let periodDescription: string;
-
-      const periodKey = this.getPeriodKey(settings);
-
-      switch (periodKey) {
-        case 'last_month': {
-          const lastMonth = subMonths(now, 1);
-          startDate = startOfMonth(lastMonth);
-          endDate = endOfMonth(lastMonth);
-          periodDescription = format(lastMonth, 'MMMM yyyy');
-          break;
-        }
-        case 'current_quarter': {
-          startDate = startOfQuarter(now);
-          endDate = endOfQuarter(now);
-          periodDescription = `Q${Math.floor(now.getMonth() / 3) + 1} ${now.getFullYear()}`;
-          break;
-        }
-        case 'last_quarter': {
-          const lastQuarter = subMonths(now, 3);
-          startDate = startOfQuarter(lastQuarter);
-          endDate = endOfQuarter(lastQuarter);
-          periodDescription = `Q${Math.floor(lastQuarter.getMonth() / 3) + 1} ${lastQuarter.getFullYear()}`;
-          break;
-        }
-        case 'current_year': {
-          startDate = startOfYear(now);
-          endDate = endOfYear(now);
-          periodDescription = format(now, 'yyyy');
-          break;
-        }
-        case 'last_year': {
-          const lastYear = subMonths(now, 12);
-          startDate = startOfYear(lastYear);
-          endDate = endOfYear(lastYear);
-          periodDescription = format(lastYear, 'yyyy');
-          break;
-        }
-        default: // current_month
-          startDate = startOfMonth(now);
-          endDate = endOfMonth(now);
-          periodDescription = format(now, 'MMMM yyyy');
-      }
+      const periodKey = resolvePeriodKey(settings);
+      const { startDate, endDate, description: periodDescription } = getPeriodRange(now, periodKey);
 
       streamDeck.logger.debug(`Fetching time entries from ${startDate} to ${endDate}`);
 
@@ -372,7 +299,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
         // Reset after 3 seconds
         setTimeout(async () => {
           const title = settings.displayTitle || 'Invoice';
-          const periodLabel = this.getPeriodLabel(settings);
+          const periodLabel = getPeriodLabel(resolvePeriodKey(settings));
           await ev.action.setTitle(`${title}\n${periodLabel}`);
           await ev.action.setImage(this.getImagePath('default'));
         }, 3000);
@@ -381,8 +308,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       }
 
       // Create invoice
-      const hourlyRateString = String(settings.hourlyRate).replace(',', '.');
-      const hourlyRate = parseFloat(hourlyRateString) || 75;
+      const hourlyRate = parseHourlyRate(settings.hourlyRate, 75);
       const invoice = await moneybirdService.createInvoiceFromTimeEntries(
         settings.contactId,
         timeEntries,
@@ -400,7 +326,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       // Reset after 3 seconds
       setTimeout(async () => {
         const title = settings.displayTitle || 'Invoice';
-        const periodLabel = this.getPeriodLabel(settings);
+        const periodLabel = getPeriodLabel(resolvePeriodKey(settings));
         await ev.action.setTitle(`${title}\n${periodLabel}`);
         await ev.action.setImage(this.getImagePath('default'));
       }, 3000);
@@ -413,7 +339,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       // Reset after 3 seconds
       setTimeout(async () => {
         const title = settings.displayTitle || 'Invoice';
-        const periodLabel = this.getPeriodLabel(settings);
+        const periodLabel = getPeriodLabel(resolvePeriodKey(settings));
         await ev.action.setTitle(`${title}\n${periodLabel}`);
         await ev.action.setImage(this.getImagePath('default'));
       }, 3000);
