@@ -4,6 +4,7 @@ import streamDeck, {
   KeyUpEvent,
   SingletonAction,
   WillAppearEvent,
+  WillDisappearEvent,
   SendToPluginEvent,
   DidReceiveSettingsEvent,
 } from '@elgato/streamdeck';
@@ -25,9 +26,10 @@ type InvoicePluginPayload = {
 
 @action({ UUID: 'com.johan-kuijt.moneybird-timer.invoice-creator' })
 export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
-  private longPressTimer?: NodeJS.Timeout;
-  private isLongPress = false;
-  private periodCycleTimeout?: NodeJS.Timeout;
+  private longPressTimers: Map<string, NodeJS.Timeout> = new Map();
+  private longPressTriggered: Set<string> = new Set();
+  private periodCycleTimeouts: Map<string, NodeJS.Timeout> = new Map();
+  private resetDisplayTimeouts: Map<string, NodeJS.Timeout> = new Map();
 
   private getImagePath(type: 'default' | 'success' | 'error'): string {
     const baseDir = 'imgs/actions/invoice';
@@ -44,12 +46,21 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
   private resetDisplayAfterDelay(
     action: KeyDownEvent<InvoiceSettings>['action'] | KeyUpEvent<InvoiceSettings>['action'],
     settings: InvoiceSettings,
-    delayMs: number
+    delayMs: number,
+    instanceId: string
   ): void {
-    setTimeout(async () => {
+    const existingTimeout = this.resetDisplayTimeouts.get(instanceId);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+
+    const timeout = setTimeout(async () => {
       await action.setTitle(this.getDefaultTitle(settings));
       await action.setImage(this.getImagePath('default'));
+      this.resetDisplayTimeouts.delete(instanceId);
     }, delayMs);
+
+    this.resetDisplayTimeouts.set(instanceId, timeout);
   }
 
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<InvoiceSettings>): Promise<void> {
@@ -211,6 +222,30 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     }
   }
 
+  override async onWillDisappear(ev: WillDisappearEvent<InvoiceSettings>): Promise<void> {
+    const instanceId = ev.action.id;
+
+    const longPressTimeout = this.longPressTimers.get(instanceId);
+    if (longPressTimeout) {
+      clearTimeout(longPressTimeout);
+      this.longPressTimers.delete(instanceId);
+    }
+
+    const periodCycleTimeout = this.periodCycleTimeouts.get(instanceId);
+    if (periodCycleTimeout) {
+      clearTimeout(periodCycleTimeout);
+      this.periodCycleTimeouts.delete(instanceId);
+    }
+
+    const resetDisplayTimeout = this.resetDisplayTimeouts.get(instanceId);
+    if (resetDisplayTimeout) {
+      clearTimeout(resetDisplayTimeout);
+      this.resetDisplayTimeouts.delete(instanceId);
+    }
+
+    this.longPressTriggered.delete(instanceId);
+  }
+
   override async onKeyDown(ev: KeyDownEvent<InvoiceSettings>): Promise<void> {
     const settings = ev.payload.settings;
     const instanceId = ev.action.id;
@@ -225,23 +260,32 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     }
 
     // Set up long press detection
-    this.isLongPress = false;
-    this.longPressTimer = setTimeout(() => {
-      this.isLongPress = true;
+    const existingTimeout = this.longPressTimers.get(instanceId);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+
+    this.longPressTriggered.delete(instanceId);
+    const longPressTimeout = setTimeout(() => {
+      this.longPressTriggered.add(instanceId);
       this.cyclePeriod(ev);
     }, 500); // 500ms = long press
+    this.longPressTimers.set(instanceId, longPressTimeout);
   }
 
   override async onKeyUp(ev: KeyUpEvent<InvoiceSettings>): Promise<void> {
+    const instanceId = ev.action.id;
+
     // Clear the long press timer
-    if (this.longPressTimer) {
-      clearTimeout(this.longPressTimer);
-      this.longPressTimer = undefined;
+    const longPressTimeout = this.longPressTimers.get(instanceId);
+    if (longPressTimeout) {
+      clearTimeout(longPressTimeout);
+      this.longPressTimers.delete(instanceId);
     }
 
     // If it was a long press, we already handled it
-    if (this.isLongPress) {
-      this.isLongPress = false;
+    if (this.longPressTriggered.has(instanceId)) {
+      this.longPressTriggered.delete(instanceId);
       return;
     }
 
@@ -253,6 +297,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     ev: KeyDownEvent<InvoiceSettings> | KeyUpEvent<InvoiceSettings>
   ): Promise<void> {
     const settings = ev.payload.settings;
+    const instanceId = ev.action.id;
 
     // Toggle between current and last
     const currentRange = settings.periodRange || 'current';
@@ -276,14 +321,16 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     await ev.action.setImage(this.getImagePath('success'));
 
     // Clear any existing timeout
-    if (this.periodCycleTimeout) {
-      clearTimeout(this.periodCycleTimeout);
+    const periodCycleTimeout = this.periodCycleTimeouts.get(instanceId);
+    if (periodCycleTimeout) {
+      clearTimeout(periodCycleTimeout);
     }
 
     // Reset image after a short delay
-    this.periodCycleTimeout = setTimeout(async () => {
+    const timeout = setTimeout(async () => {
       await ev.action.setImage(this.getImagePath('default'));
     }, 1000);
+    this.periodCycleTimeouts.set(instanceId, timeout);
   }
 
   private async createInvoice(ev: KeyUpEvent<InvoiceSettings>): Promise<void> {
@@ -312,7 +359,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       if (timeEntries.length === 0) {
         await ev.action.setTitle('No hours');
         await ev.action.setImage(this.getImagePath('error'));
-        this.resetDisplayAfterDelay(ev.action, settings, 3000);
+        this.resetDisplayAfterDelay(ev.action, settings, 3000, instanceId);
 
         return;
       }
@@ -332,13 +379,13 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       // Show success state
       await ev.action.setTitle('✓ Created');
       await ev.action.setImage(this.getImagePath('success'));
-      this.resetDisplayAfterDelay(ev.action, settings, 3000);
+      this.resetDisplayAfterDelay(ev.action, settings, 3000, instanceId);
     } catch (error: unknown) {
       streamDeck.logger.error(`Error creating invoice for instance ${instanceId}:`, error);
 
       await ev.action.setImage(this.getImagePath('error'));
       await ev.action.setTitle('Error');
-      this.resetDisplayAfterDelay(ev.action, settings, 3000);
+      this.resetDisplayAfterDelay(ev.action, settings, 3000, instanceId);
     }
   }
 }
