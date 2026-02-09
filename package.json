@@ -5,13 +5,14 @@
     "watch": "rollup -c -w --watch.onEnd=\"streamdeck restart com.johan-kuijt.moneybird-timer\"",
     "lint": "eslint \"src/**/*.ts\"",
     "lint:fix": "eslint \"src/**/*.ts\" --fix",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.test.json && node --test .tmp-tests/tests/**/*.test.js",
     "format": "prettier --write \"src/**/*.{ts,tsx,json}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,json}\"",
     "bump-version": "node scripts/bump-version.js",
     "package": "node scripts/package-plugin.js",
     "package:no-bump": "node scripts/package-plugin.js --no-bump",
-    "release": "npm run lint && npm run build && npm run package"
+    "release": "npm run lint && npm run typecheck && npm run build && npm run package"
   },
   "type": "module",
   "devDependencies": {
