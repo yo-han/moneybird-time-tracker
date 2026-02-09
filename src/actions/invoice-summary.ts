@@ -3,6 +3,7 @@ import streamDeck, {
   KeyDownEvent,
   SingletonAction,
   WillAppearEvent,
+  WillDisappearEvent,
   SendToPluginEvent,
   DidReceiveSettingsEvent,
 } from '@elgato/streamdeck';
@@ -26,11 +27,12 @@ type InvoicePluginPayload = {
 type SummaryAction = {
   setTitle(title: string): Promise<void>;
   setImage(image: string): Promise<void>;
+  getSettings(): Promise<InvoiceSettings>;
 };
 
 @action({ UUID: 'com.johan-kuijt.moneybird-timer.invoice-summary' })
 export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
-  private updateInterval?: NodeJS.Timeout;
+  private updateIntervals: Map<string, NodeJS.Timeout> = new Map();
 
   private getImagePath(type: 'default' | 'preview' | 'error'): string {
     const baseDir = 'imgs/actions/invoice';
@@ -89,30 +91,47 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
     }
   }
 
-  override async onWillAppear(ev: WillAppearEvent<InvoiceSettings>): Promise<void> {
-    await this.updateSummary(ev.action, ev.payload.settings);
-
-    // Update every 30 seconds
-    this.updateInterval = setInterval(() => {
-      this.updateSummary(ev.action, ev.payload.settings);
-    }, 30000);
+  private async updateSummaryFromAction(action: SummaryAction): Promise<void> {
+    const settings = await action.getSettings();
+    await this.updateSummary(action, settings);
   }
 
-  override async onWillDisappear(): Promise<void> {
-    if (this.updateInterval) {
-      clearInterval(this.updateInterval);
-      this.updateInterval = undefined;
+  override async onWillAppear(ev: WillAppearEvent<InvoiceSettings>): Promise<void> {
+    const instanceId = ev.action.id;
+    await this.updateSummaryFromAction(ev.action);
+
+    const existingInterval = this.updateIntervals.get(instanceId);
+    if (existingInterval) {
+      clearInterval(existingInterval);
+    }
+
+    // Update every 30 seconds
+    const interval = setInterval(() => {
+      this.updateSummaryFromAction(ev.action).catch(error => {
+        streamDeck.logger.error('Error in periodic summary refresh:', error);
+      });
+    }, 30000);
+
+    this.updateIntervals.set(instanceId, interval);
+  }
+
+  override async onWillDisappear(ev: WillDisappearEvent<InvoiceSettings>): Promise<void> {
+    const instanceId = ev.action.id;
+    const interval = this.updateIntervals.get(instanceId);
+    if (interval) {
+      clearInterval(interval);
+      this.updateIntervals.delete(instanceId);
     }
   }
 
   override async onKeyDown(ev: KeyDownEvent<InvoiceSettings>): Promise<void> {
     // Refresh on press
-    await this.updateSummary(ev.action, ev.payload.settings);
+    await this.updateSummaryFromAction(ev.action);
   }
 
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<InvoiceSettings>): Promise<void> {
     streamDeck.logger.debug('[InvoiceSummary] Settings received');
-    await this.updateSummary(ev.action, ev.payload.settings);
+    await this.updateSummaryFromAction(ev.action);
   }
 
   override async onSendToPlugin(
@@ -176,7 +195,7 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
       streamDeck.logger.debug('Settings saved with new data');
 
       // Update summary after loading new data
-      await this.updateSummary(ev.action, newSettings);
+      await this.updateSummaryFromAction(ev.action);
     } catch (fetchError) {
       streamDeck.logger.error('Error fetching Moneybird data:', {
         message: (fetchError as Error).message,
