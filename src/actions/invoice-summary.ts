@@ -21,7 +21,7 @@ import {
   applyInvoiceAdministrationChange,
   applyInvoiceGlobalSettings,
 } from '../utils/invoice-action-settings';
-import { clearIntervalForKey } from '../utils/runtime-timers';
+import { clearIntervalForKey, setIntervalForKey } from '../utils/runtime-timers';
 import { setActionDisplay } from '../utils/action-display';
 import { logError } from '../utils/error-logging';
 
@@ -103,11 +103,6 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
     const instanceId = ev.action.id;
     await this.updateSummaryFromAction(ev.action);
 
-    const existingInterval = this.updateIntervals.get(instanceId);
-    if (existingInterval) {
-      clearInterval(existingInterval);
-    }
-
     // Update every 30 seconds
     const interval = setInterval(() => {
       this.updateSummaryFromAction(ev.action).catch(error => {
@@ -115,7 +110,7 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
       });
     }, 30000);
 
-    this.updateIntervals.set(instanceId, interval);
+    setIntervalForKey(this.updateIntervals, instanceId, interval);
   }
 
   override async onWillDisappear(ev: WillDisappearEvent<InvoiceSettings>): Promise<void> {

@@ -17,3 +17,21 @@ export function clearIntervalForKey(map: Map<string, NodeJS.Timeout>, key: strin
   clearInterval(interval);
   map.delete(key);
 }
+
+export function setTimeoutForKey(
+  map: Map<string, NodeJS.Timeout>,
+  key: string,
+  timeout: NodeJS.Timeout
+): void {
+  clearTimeoutForKey(map, key);
+  map.set(key, timeout);
+}
+
+export function setIntervalForKey(
+  map: Map<string, NodeJS.Timeout>,
+  key: string,
+  interval: NodeJS.Timeout
+): void {
+  clearIntervalForKey(map, key);
+  map.set(key, interval);
+}

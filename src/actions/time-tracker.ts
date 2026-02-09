@@ -18,7 +18,12 @@ import {
 import { differenceInSeconds, differenceInMinutes, differenceInHours } from 'date-fns';
 import path from 'path';
 import { calculateRemainingAutoStopHours, normalizeAutoStopHours } from '../utils/auto-stop-utils';
-import { clearIntervalForKey, clearTimeoutForKey } from '../utils/runtime-timers';
+import {
+  clearIntervalForKey,
+  clearTimeoutForKey,
+  setIntervalForKey,
+  setTimeoutForKey,
+} from '../utils/runtime-timers';
 import { setConfigNeededDisplay, setErrorDisplay } from '../utils/action-display';
 import { logError } from '../utils/error-logging';
 
@@ -313,19 +318,13 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       return;
     }
 
-    const existingInterval = this.updateIntervals.get(instanceId);
-
-    if (existingInterval) {
-      clearInterval(existingInterval);
-    }
-
     const interval = setInterval(() => {
       this.updateTimerDisplay(ev).catch(error =>
         logError(streamDeck.logger, 'Error updating display', error, { instanceId })
       );
     }, 1000);
 
-    this.updateIntervals.set(instanceId, interval);
+    setIntervalForKey(this.updateIntervals, instanceId, interval);
     streamDeck.logger.debug(`Interval started for instance ${instanceId}`);
   }
 
@@ -444,7 +443,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
             this.autoStopResetTimeouts.delete(instanceId);
           }, 3000);
 
-          this.autoStopResetTimeouts.set(instanceId, resetTimeout);
+          setTimeoutForKey(this.autoStopResetTimeouts, instanceId, resetTimeout);
         }
       } catch (error) {
         logError(streamDeck.logger, 'Error during auto-stop', error, { instanceId });
@@ -454,6 +453,6 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       this.autoStopTimeouts.delete(instanceId);
     }, milliseconds);
 
-    this.autoStopTimeouts.set(instanceId, timeout);
+    setTimeoutForKey(this.autoStopTimeouts, instanceId, timeout);
   }
 }

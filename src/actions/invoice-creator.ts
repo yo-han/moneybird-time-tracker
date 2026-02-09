@@ -21,7 +21,7 @@ import {
   applyInvoiceAdministrationChange,
   applyInvoiceGlobalSettings,
 } from '../utils/invoice-action-settings';
-import { clearTimeoutForKey } from '../utils/runtime-timers';
+import { clearTimeoutForKey, setTimeoutForKey } from '../utils/runtime-timers';
 import { setConfigNeededDisplay, setErrorDisplay } from '../utils/action-display';
 import { logError } from '../utils/error-logging';
 
@@ -56,11 +56,6 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     delayMs: number,
     instanceId: string
   ): void {
-    const existingTimeout = this.resetDisplayTimeouts.get(instanceId);
-    if (existingTimeout) {
-      clearTimeout(existingTimeout);
-    }
-
     const timeout = setTimeout(async () => {
       try {
         await action.setTitle(this.getDefaultTitle(settings));
@@ -72,7 +67,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       }
     }, delayMs);
 
-    this.resetDisplayTimeouts.set(instanceId, timeout);
+    setTimeoutForKey(this.resetDisplayTimeouts, instanceId, timeout);
   }
 
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<InvoiceSettings>): Promise<void> {
@@ -187,7 +182,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       this.longPressTriggered.add(instanceId);
       this.cyclePeriod(ev);
     }, 500); // 500ms = long press
-    this.longPressTimers.set(instanceId, longPressTimeout);
+    setTimeoutForKey(this.longPressTimers, instanceId, longPressTimeout);
   }
 
   override async onKeyUp(ev: KeyUpEvent<InvoiceSettings>): Promise<void> {
@@ -246,7 +241,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
         this.periodCycleTimeouts.delete(instanceId);
       }
     }, 1000);
-    this.periodCycleTimeouts.set(instanceId, timeout);
+    setTimeoutForKey(this.periodCycleTimeouts, instanceId, timeout);
   }
 
   private async createInvoice(ev: KeyUpEvent<InvoiceSettings>): Promise<void> {
