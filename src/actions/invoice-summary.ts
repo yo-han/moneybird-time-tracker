@@ -8,7 +8,7 @@ import streamDeck, {
   DidReceiveSettingsEvent,
 } from '@elgato/streamdeck';
 import { MoneybirdService } from '../services/moneybird';
-import { InvoiceSettings, administrationToJson, contactToJson } from '../types/moneybird';
+import { InvoiceSettings } from '../types/moneybird';
 import path from 'path';
 import {
   calculateTotalHours,
@@ -17,6 +17,10 @@ import {
   parseHourlyRate,
   resolvePeriodKey,
 } from '../utils/invoice-utils';
+import {
+  applyInvoiceAdministrationChange,
+  applyInvoiceGlobalSettings,
+} from '../utils/invoice-action-settings';
 
 type InvoicePluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -158,93 +162,21 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
   private async handleAdministrationChange(
     ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
   ): Promise<void> {
-    const { administrationId } = ev.payload;
-    const currentSettings = await ev.action.getSettings();
+    const updated = await applyInvoiceAdministrationChange(ev.action, ev.payload.administrationId, {
+      logger: streamDeck.logger,
+    });
 
-    streamDeck.logger.debug(
-      `handleAdministrationChange called with administrationId: ${administrationId}`
-    );
-
-    if (!currentSettings.apiKey || !administrationId) {
-      streamDeck.logger.debug('Missing apiKey or administrationId, aborting');
-      return;
-    }
-
-    try {
-      const moneybirdService = new MoneybirdService(currentSettings.apiKey, administrationId);
-
-      streamDeck.logger.debug('Fetching contacts...');
-      const rawContacts = await moneybirdService.getContacts();
-
-      const contacts = Object.fromEntries(
-        rawContacts.map(contact => [contact.id, contactToJson(contact)])
-      );
-
-      streamDeck.logger.debug(
-        `Fetched ${rawContacts.length} contacts for administration ${administrationId}`
-      );
-
-      const newSettings: InvoiceSettings = {
-        ...currentSettings,
-        administrationId,
-        contacts,
-        contactId: '',
-      };
-
-      await ev.action.setSettings(newSettings);
-      streamDeck.logger.debug('Settings saved with new data');
-
+    if (updated) {
       // Update summary after loading new data
       await this.updateSummaryFromAction(ev.action);
-    } catch (fetchError) {
-      streamDeck.logger.error('Error fetching Moneybird data:', {
-        message: (fetchError as Error).message,
-        stack: (fetchError as Error).stack,
-      });
     }
   }
 
   private async handleGlobalSettings(
     ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
   ): Promise<void> {
-    const { apiKey } = ev.payload;
-    const currentSettings = await ev.action.getSettings();
-
-    if (!apiKey) {
-      streamDeck.logger.warn('No API key provided');
-      return;
-    }
-
-    try {
-      const moneybirdService = new MoneybirdService(apiKey);
-
-      const rawAdministrations = await moneybirdService.getAdministrations();
-      const administrations = Object.fromEntries(
-        rawAdministrations.map(admin => [admin.id, administrationToJson(admin)])
-      );
-      streamDeck.logger.debug(`Fetched ${rawAdministrations.length} administrations`);
-
-      const newSettings: InvoiceSettings = {
-        ...currentSettings,
-        apiKey,
-        administrations,
-        displayTitle: currentSettings.displayTitle,
-      };
-
-      await ev.action.setSettings(newSettings);
-    } catch (fetchError) {
-      streamDeck.logger.error('Error fetching Moneybird data:', {
-        message: (fetchError as Error).message,
-        stack: (fetchError as Error).stack,
-      });
-
-      const clearedSettings = {
-        ...currentSettings,
-        apiKey,
-        administrations: {},
-        contacts: {},
-      };
-      await ev.action.setSettings(clearedSettings);
-    }
+    await applyInvoiceGlobalSettings(ev.action, ev.payload.apiKey, {
+      logger: streamDeck.logger,
+    });
   }
 }

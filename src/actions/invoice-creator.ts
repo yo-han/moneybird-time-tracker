@@ -9,7 +9,7 @@ import streamDeck, {
   DidReceiveSettingsEvent,
 } from '@elgato/streamdeck';
 import { MoneybirdService } from '../services/moneybird';
-import { InvoiceSettings, administrationToJson, contactToJson } from '../types/moneybird';
+import { InvoiceSettings } from '../types/moneybird';
 import path from 'path';
 import {
   getPeriodLabel,
@@ -17,6 +17,10 @@ import {
   parseHourlyRate,
   resolvePeriodKey,
 } from '../utils/invoice-utils';
+import {
+  applyInvoiceAdministrationChange,
+  applyInvoiceGlobalSettings,
+} from '../utils/invoice-action-settings';
 
 type InvoicePluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -66,6 +70,16 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     }, delayMs);
 
     this.resetDisplayTimeouts.set(instanceId, timeout);
+  }
+
+  private clearMapTimer(map: Map<string, NodeJS.Timeout>, instanceId: string): void {
+    const timer = map.get(instanceId);
+    if (!timer) {
+      return;
+    }
+
+    clearTimeout(timer);
+    map.delete(instanceId);
   }
 
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<InvoiceSettings>): Promise<void> {
@@ -121,91 +135,17 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
   private async handleAdministrationChange(
     ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
   ): Promise<void> {
-    const { administrationId } = ev.payload;
-    const currentSettings = await ev.action.getSettings();
-
-    streamDeck.logger.debug(
-      `handleAdministrationChange called with administrationId: ${administrationId}`
-    );
-
-    if (!currentSettings.apiKey || !administrationId) {
-      streamDeck.logger.debug('Missing apiKey or administrationId, aborting');
-      return;
-    }
-
-    try {
-      const moneybirdService = new MoneybirdService(currentSettings.apiKey, administrationId);
-
-      streamDeck.logger.debug('Fetching contacts...');
-      const rawContacts = await moneybirdService.getContacts();
-
-      const contacts = Object.fromEntries(
-        rawContacts.map(contact => [contact.id, contactToJson(contact)])
-      );
-
-      streamDeck.logger.debug(
-        `Fetched ${rawContacts.length} contacts for administration ${administrationId}`
-      );
-
-      const newSettings: InvoiceSettings = {
-        ...currentSettings,
-        administrationId,
-        contacts,
-        contactId: '',
-      };
-
-      await ev.action.setSettings(newSettings);
-      streamDeck.logger.debug('Settings saved with new data');
-    } catch (fetchError) {
-      streamDeck.logger.error('Error fetching Moneybird data:', {
-        message: (fetchError as Error).message,
-        stack: (fetchError as Error).stack,
-      });
-    }
+    await applyInvoiceAdministrationChange(ev.action, ev.payload.administrationId, {
+      logger: streamDeck.logger,
+    });
   }
 
   private async handleGlobalSettings(
     ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
   ): Promise<void> {
-    const { apiKey } = ev.payload;
-    const currentSettings = await ev.action.getSettings();
-
-    if (!apiKey) {
-      streamDeck.logger.warn('No API key provided');
-      return;
-    }
-
-    try {
-      const moneybirdService = new MoneybirdService(apiKey);
-
-      const rawAdministrations = await moneybirdService.getAdministrations();
-      const administrations = Object.fromEntries(
-        rawAdministrations.map(admin => [admin.id, administrationToJson(admin)])
-      );
-      streamDeck.logger.debug(`Fetched ${rawAdministrations.length} administrations`);
-
-      const newSettings: InvoiceSettings = {
-        ...currentSettings,
-        apiKey,
-        administrations,
-        displayTitle: currentSettings.displayTitle,
-      };
-
-      await ev.action.setSettings(newSettings);
-    } catch (fetchError) {
-      streamDeck.logger.error('Error fetching Moneybird data:', {
-        message: (fetchError as Error).message,
-        stack: (fetchError as Error).stack,
-      });
-
-      const clearedSettings = {
-        ...currentSettings,
-        apiKey,
-        administrations: {},
-        contacts: {},
-      };
-      await ev.action.setSettings(clearedSettings);
-    }
+    await applyInvoiceGlobalSettings(ev.action, ev.payload.apiKey, {
+      logger: streamDeck.logger,
+    });
   }
 
   override async onWillAppear(ev: WillAppearEvent<InvoiceSettings>): Promise<void> {
@@ -230,23 +170,9 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
   override async onWillDisappear(ev: WillDisappearEvent<InvoiceSettings>): Promise<void> {
     const instanceId = ev.action.id;
 
-    const longPressTimeout = this.longPressTimers.get(instanceId);
-    if (longPressTimeout) {
-      clearTimeout(longPressTimeout);
-      this.longPressTimers.delete(instanceId);
-    }
-
-    const periodCycleTimeout = this.periodCycleTimeouts.get(instanceId);
-    if (periodCycleTimeout) {
-      clearTimeout(periodCycleTimeout);
-      this.periodCycleTimeouts.delete(instanceId);
-    }
-
-    const resetDisplayTimeout = this.resetDisplayTimeouts.get(instanceId);
-    if (resetDisplayTimeout) {
-      clearTimeout(resetDisplayTimeout);
-      this.resetDisplayTimeouts.delete(instanceId);
-    }
+    this.clearMapTimer(this.longPressTimers, instanceId);
+    this.clearMapTimer(this.periodCycleTimeouts, instanceId);
+    this.clearMapTimer(this.resetDisplayTimeouts, instanceId);
 
     this.longPressTriggered.delete(instanceId);
   }
@@ -265,10 +191,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     }
 
     // Set up long press detection
-    const existingTimeout = this.longPressTimers.get(instanceId);
-    if (existingTimeout) {
-      clearTimeout(existingTimeout);
-    }
+    this.clearMapTimer(this.longPressTimers, instanceId);
 
     this.longPressTriggered.delete(instanceId);
     const longPressTimeout = setTimeout(() => {
@@ -282,11 +205,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     const instanceId = ev.action.id;
 
     // Clear the long press timer
-    const longPressTimeout = this.longPressTimers.get(instanceId);
-    if (longPressTimeout) {
-      clearTimeout(longPressTimeout);
-      this.longPressTimers.delete(instanceId);
-    }
+    this.clearMapTimer(this.longPressTimers, instanceId);
 
     // If it was a long press, we already handled it
     if (this.longPressTriggered.has(instanceId)) {
@@ -326,10 +245,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     await ev.action.setImage(this.getImagePath('success'));
 
     // Clear any existing timeout
-    const periodCycleTimeout = this.periodCycleTimeouts.get(instanceId);
-    if (periodCycleTimeout) {
-      clearTimeout(periodCycleTimeout);
-    }
+    this.clearMapTimer(this.periodCycleTimeouts, instanceId);
 
     // Reset image after a short delay
     const timeout = setTimeout(async () => {
