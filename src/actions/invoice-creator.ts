@@ -329,6 +329,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     // Reset image after a short delay
     const timeout = setTimeout(async () => {
       await ev.action.setImage(this.getImagePath('default'));
+      this.periodCycleTimeouts.delete(instanceId);
     }, 1000);
     this.periodCycleTimeouts.set(instanceId, timeout);
   }
