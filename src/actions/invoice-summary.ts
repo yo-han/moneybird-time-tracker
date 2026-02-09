@@ -23,6 +23,7 @@ import {
 } from '../utils/invoice-action-settings';
 import { clearIntervalForKey } from '../utils/runtime-timers';
 import { setActionDisplay } from '../utils/action-display';
+import { logError } from '../utils/error-logging';
 
 type InvoicePluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -87,7 +88,7 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
 
       await setActionDisplay(action, displayText, this.getImagePath('preview'));
     } catch (error) {
-      streamDeck.logger.error('Error fetching summary data:', error);
+      logError(streamDeck.logger, 'Error fetching summary data', error);
       const displayTitle = settings.displayTitle || getPeriodLabel(periodKey);
       await setActionDisplay(action, `${displayTitle}\nError`, this.getImagePath('error'));
     }
@@ -110,7 +111,7 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
     // Update every 30 seconds
     const interval = setInterval(() => {
       this.updateSummaryFromAction(ev.action).catch(error => {
-        streamDeck.logger.error('Error in periodic summary refresh:', error);
+        logError(streamDeck.logger, 'Error in periodic summary refresh', error);
       });
     }, 30000);
 
@@ -146,10 +147,7 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
         await this.handleAdministrationChange(ev);
       }
     } catch (error) {
-      streamDeck.logger.error('Unexpected error in onSendToPlugin:', {
-        message: (error as Error).message,
-        stack: (error as Error).stack,
-      });
+      logError(streamDeck.logger, 'Unexpected error in onSendToPlugin', error);
     }
   }
 

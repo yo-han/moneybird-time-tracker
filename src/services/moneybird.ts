@@ -12,6 +12,7 @@ import {
 } from '../types/moneybird.js';
 import { format } from 'date-fns';
 import { formatMoneybirdDate, groupTimeEntriesByDescription } from '../utils/moneybird-utils.js';
+import { getErrorDetails } from '../utils/error-logging.js';
 
 type MoneybirdLogger = {
   debug: (...args: unknown[]) => void;
@@ -78,8 +79,9 @@ export class MoneybirdService {
       errorMessage = 'No response received from Moneybird API. Check your internet connection.';
       this.logger.error('No response from Moneybird API');
     } else {
-      errorMessage = `Request setup error: ${axiosError.message}`;
-      this.logger.error('Moneybird API Request Error:', axiosError.message);
+      const errorDetails = getErrorDetails(error);
+      errorMessage = `Request setup error: ${errorDetails.message}`;
+      this.logger.error('Moneybird API Request Error', errorDetails);
     }
 
     throw new Error(errorMessage);
@@ -358,7 +360,7 @@ export class MoneybirdService {
       await Promise.all(updatePromises);
       this.logger.debug(`Linked ${timeEntries.length} time entries to invoice ${invoiceId}`);
     } catch (error) {
-      this.logger.error('Error linking time entries to invoice:', error);
+      this.logger.error('Error linking time entries to invoice', getErrorDetails(error));
       // Don't throw here, the invoice is already created
     }
   }

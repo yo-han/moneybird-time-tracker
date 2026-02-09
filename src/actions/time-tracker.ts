@@ -20,6 +20,7 @@ import path from 'path';
 import { calculateRemainingAutoStopHours, normalizeAutoStopHours } from '../utils/auto-stop-utils';
 import { clearIntervalForKey, clearTimeoutForKey } from '../utils/runtime-timers';
 import { setConfigNeededDisplay, setErrorDisplay } from '../utils/action-display';
+import { logError } from '../utils/error-logging';
 
 type TimerPluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -57,7 +58,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
       streamDeck.logger.debug(`Settings updated for instance ${instanceId}`);
     } catch (error) {
-      streamDeck.logger.error('Error in onDidReceiveSettings:', error);
+      logError(streamDeck.logger, 'Error in onDidReceiveSettings', error);
     }
   }
 
@@ -75,10 +76,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         await this.handleAdministrationChange(ev);
       }
     } catch (error) {
-      streamDeck.logger.error('Unexpected error in onSendToPlugin:', {
-        message: (error as Error).message,
-        stack: (error as Error).stack,
-      });
+      logError(streamDeck.logger, 'Unexpected error in onSendToPlugin', error);
     }
   }
 
@@ -133,10 +131,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       await ev.action.setSettings(newSettings);
       streamDeck.logger.debug('Settings saved with new data');
     } catch (fetchError) {
-      streamDeck.logger.error('Error fetching Moneybird data:', {
-        message: (fetchError as Error).message,
-        stack: (fetchError as Error).stack,
-      });
+      logError(streamDeck.logger, 'Error fetching Moneybird data', fetchError);
     }
   }
 
@@ -173,10 +168,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
       await ev.action.setSettings(newSettings);
     } catch (fetchError) {
-      streamDeck.logger.error('Error fetching Moneybird data:', {
-        message: (fetchError as Error).message,
-        stack: (fetchError as Error).stack,
-      });
+      logError(streamDeck.logger, 'Error fetching Moneybird data', fetchError);
 
       const clearedSettings = {
         ...currentSettings,
@@ -293,7 +285,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         this.clearInstanceRuntime(instanceId);
       }
     } catch (error: unknown) {
-      streamDeck.logger.error(`Error managing timer for instance ${instanceId}:`, error);
+      logError(streamDeck.logger, 'Error managing timer', error, { instanceId });
 
       await setErrorDisplay(ev.action, this.getImagePath('error'));
 
@@ -329,7 +321,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
     const interval = setInterval(() => {
       this.updateTimerDisplay(ev).catch(error =>
-        streamDeck.logger.error(`Error updating display for instance ${instanceId}:`, error)
+        logError(streamDeck.logger, 'Error updating display', error, { instanceId })
       );
     }, 1000);
 
@@ -387,7 +379,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         await ev.action.setTitle(`⏱️ ${displayTime}`);
         await ev.action.setImage(imagePath);
       } catch (error) {
-        streamDeck.logger.error('Error updating timer display:', error);
+        logError(streamDeck.logger, 'Error updating timer display', error);
       }
     } else {
       streamDeck.logger.debug('Not updating timer display - conditions not met');
@@ -455,7 +447,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
           this.autoStopResetTimeouts.set(instanceId, resetTimeout);
         }
       } catch (error) {
-        streamDeck.logger.error(`Error during auto-stop for instance ${instanceId}:`, error);
+        logError(streamDeck.logger, 'Error during auto-stop', error, { instanceId });
       }
 
       // Remove timeout from map

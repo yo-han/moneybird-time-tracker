@@ -5,6 +5,7 @@ import {
   contactToJson,
   JsonValue,
 } from '../types/moneybird.js';
+import { logError } from './error-logging.js';
 
 type InvoiceSettingsAction = {
   getSettings(): Promise<InvoiceSettings>;
@@ -75,10 +76,7 @@ export async function applyInvoiceAdministrationChange(
     logger.debug('Settings saved with new data');
     return true;
   } catch (fetchError) {
-    logger.error('Error fetching Moneybird data:', {
-      message: (fetchError as Error).message,
-      stack: (fetchError as Error).stack,
-    });
+    logError(logger, 'Error fetching Moneybird data', fetchError);
     return false;
   }
 }
@@ -113,10 +111,7 @@ export async function applyInvoiceGlobalSettings(
     await action.setSettings(newSettings);
     return true;
   } catch (fetchError) {
-    logger.error('Error fetching Moneybird data:', {
-      message: (fetchError as Error).message,
-      stack: (fetchError as Error).stack,
-    });
+    logError(logger, 'Error fetching Moneybird data', fetchError);
 
     const clearedSettings: InvoiceSettings = {
       ...currentSettings,

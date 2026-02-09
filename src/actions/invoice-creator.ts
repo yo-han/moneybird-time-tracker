@@ -23,6 +23,7 @@ import {
 } from '../utils/invoice-action-settings';
 import { clearTimeoutForKey } from '../utils/runtime-timers';
 import { setConfigNeededDisplay, setErrorDisplay } from '../utils/action-display';
+import { logError } from '../utils/error-logging';
 
 type InvoicePluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -65,7 +66,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
         await action.setTitle(this.getDefaultTitle(settings));
         await action.setImage(this.getImagePath('default'));
       } catch (error) {
-        streamDeck.logger.error('Failed to reset invoice creator display:', error);
+        logError(streamDeck.logger, 'Failed to reset invoice creator display', error);
       } finally {
         this.resetDisplayTimeouts.delete(instanceId);
       }
@@ -99,7 +100,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
 
       streamDeck.logger.debug(`[InvoiceCreator] Settings updated for instance ${instanceId}`);
     } catch (error) {
-      streamDeck.logger.error('Error in onDidReceiveSettings:', error);
+      logError(streamDeck.logger, 'Error in onDidReceiveSettings', error);
     }
   }
 
@@ -117,10 +118,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
         await this.handleAdministrationChange(ev);
       }
     } catch (error) {
-      streamDeck.logger.error('Unexpected error in onSendToPlugin:', {
-        message: (error as Error).message,
-        stack: (error as Error).stack,
-      });
+      logError(streamDeck.logger, 'Unexpected error in onSendToPlugin', error);
     }
   }
 
@@ -243,7 +241,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       try {
         await ev.action.setImage(this.getImagePath('default'));
       } catch (error) {
-        streamDeck.logger.error('Failed to reset invoice creator cycle image:', error);
+        logError(streamDeck.logger, 'Failed to reset invoice creator cycle image', error);
       } finally {
         this.periodCycleTimeouts.delete(instanceId);
       }
@@ -299,7 +297,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       await ev.action.setImage(this.getImagePath('success'));
       this.resetDisplayAfterDelay(ev.action, settings, 3000, instanceId);
     } catch (error: unknown) {
-      streamDeck.logger.error(`Error creating invoice for instance ${instanceId}:`, error);
+      logError(streamDeck.logger, 'Error creating invoice', error, { instanceId });
 
       await setErrorDisplay(ev.action, this.getImagePath('error'));
       this.resetDisplayAfterDelay(ev.action, settings, 3000, instanceId);
