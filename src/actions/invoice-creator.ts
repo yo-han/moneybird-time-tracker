@@ -22,6 +22,7 @@ import {
   applyInvoiceGlobalSettings,
 } from '../utils/invoice-action-settings';
 import { clearTimeoutForKey } from '../utils/runtime-timers';
+import { setConfigNeededDisplay, setErrorDisplay } from '../utils/action-display';
 
 type InvoicePluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -176,8 +177,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
 
     if (!settings.apiKey || !settings.administrationId || !settings.contactId) {
       streamDeck.logger.debug('Missing required settings');
-      await ev.action.setImage(this.getImagePath('default'));
-      await ev.action.setTitle('Config needed');
+      await setConfigNeededDisplay(ev.action, this.getImagePath('default'));
       return;
     }
 
@@ -301,8 +301,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     } catch (error: unknown) {
       streamDeck.logger.error(`Error creating invoice for instance ${instanceId}:`, error);
 
-      await ev.action.setImage(this.getImagePath('error'));
-      await ev.action.setTitle('Error');
+      await setErrorDisplay(ev.action, this.getImagePath('error'));
       this.resetDisplayAfterDelay(ev.action, settings, 3000, instanceId);
     }
   }

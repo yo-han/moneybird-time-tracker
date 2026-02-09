@@ -19,6 +19,7 @@ import { differenceInSeconds, differenceInMinutes, differenceInHours } from 'dat
 import path from 'path';
 import { calculateRemainingAutoStopHours, normalizeAutoStopHours } from '../utils/auto-stop-utils';
 import { clearIntervalForKey, clearTimeoutForKey } from '../utils/runtime-timers';
+import { setConfigNeededDisplay, setErrorDisplay } from '../utils/action-display';
 
 type TimerPluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -227,8 +228,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
     if (!settings.apiKey || !settings.administrationId || !settings.projectId || !settings.userId) {
       streamDeck.logger.debug('Missing required settings');
-      await ev.action.setImage(this.getImagePath('default'));
-      await ev.action.setTitle('Config needed');
+      await setConfigNeededDisplay(ev.action, this.getImagePath('default'));
       return;
     }
 
@@ -295,8 +295,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     } catch (error: unknown) {
       streamDeck.logger.error(`Error managing timer for instance ${instanceId}:`, error);
 
-      await ev.action.setImage(this.getImagePath('error'));
-      await ev.action.setTitle('Error');
+      await setErrorDisplay(ev.action, this.getImagePath('error'));
 
       const newSettings = {
         ...settings,

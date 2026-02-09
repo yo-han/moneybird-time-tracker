@@ -22,6 +22,7 @@ import {
   applyInvoiceGlobalSettings,
 } from '../utils/invoice-action-settings';
 import { clearIntervalForKey } from '../utils/runtime-timers';
+import { setActionDisplay } from '../utils/action-display';
 
 type InvoicePluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -48,8 +49,7 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
   private async updateSummary(action: SummaryAction, settings: InvoiceSettings): Promise<void> {
     if (!settings.apiKey || !settings.administrationId || !settings.contactId) {
       const displayTitle = settings.displayTitle || 'Not configured';
-      await action.setTitle(displayTitle);
-      await action.setImage(this.getImagePath('default'));
+      await setActionDisplay(action, displayTitle, this.getImagePath('default'));
       return;
     }
 
@@ -67,8 +67,7 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
 
       if (timeEntries.length === 0) {
         const displayTitle = settings.displayTitle || getPeriodLabel(periodKey);
-        await action.setTitle(`${displayTitle}\nNo hours`);
-        await action.setImage(this.getImagePath('default'));
+        await setActionDisplay(action, `${displayTitle}\nNo hours`, this.getImagePath('default'));
         return;
       }
 
@@ -86,13 +85,11 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
         displayText += ` = €${totalAmount.toFixed(0)}`;
       }
 
-      await action.setTitle(displayText);
-      await action.setImage(this.getImagePath('preview'));
+      await setActionDisplay(action, displayText, this.getImagePath('preview'));
     } catch (error) {
       streamDeck.logger.error('Error fetching summary data:', error);
       const displayTitle = settings.displayTitle || getPeriodLabel(periodKey);
-      await action.setTitle(`${displayTitle}\nError`);
-      await action.setImage(this.getImagePath('error'));
+      await setActionDisplay(action, `${displayTitle}\nError`, this.getImagePath('error'));
     }
   }
 
