@@ -28,6 +28,10 @@ export function groupTimeEntriesByDescription(
   const groups = new Map<string, GroupedTimeEntries>();
 
   for (const entry of timeEntries) {
+    if (!entry.ended_at) {
+      continue;
+    }
+
     const key = entry.description || 'Werkzaamheden';
     const existing = groups.get(key);
 

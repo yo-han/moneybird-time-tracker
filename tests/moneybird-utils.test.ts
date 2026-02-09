@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { formatMoneybirdDate, groupTimeEntriesByDescription } from '../src/utils/moneybird-utils.js';
-import { MoneybirdTimeEntry } from '../src/types/moneybird.js';
+import type { MoneybirdTimeEntry } from '../src/types/moneybird.js';
 
 test('formatMoneybirdDate returns expected structure', () => {
   const formatted = formatMoneybirdDate(new Date('2026-02-09T10:30:00.000Z'));
@@ -100,4 +100,40 @@ test('groupTimeEntriesByDescription safely handles special object-key names', ()
   assert.equal(grouped.length, 2);
   assert.ok(grouped.find(group => group.description === '__proto__'));
   assert.ok(grouped.find(group => group.description === 'constructor'));
+});
+
+test('groupTimeEntriesByDescription ignores entries without ended_at', () => {
+  const entries: MoneybirdTimeEntry[] = [
+    {
+      id: '1',
+      started_at: '2026-02-01T10:00:00.000Z',
+      ended_at: null,
+      description: 'Running',
+      billable: true,
+      user_id: 'u1',
+      contact_id: 'c1',
+      project_id: 'p1',
+      paused_duration: 0,
+      created_at: '2026-02-01T10:00:00.000Z',
+      updated_at: '2026-02-01T10:00:00.000Z',
+    },
+    {
+      id: '2',
+      started_at: '2026-02-01T10:00:00.000Z',
+      ended_at: '2026-02-01T11:00:00.000Z',
+      description: 'Done',
+      billable: true,
+      user_id: 'u1',
+      contact_id: 'c1',
+      project_id: 'p1',
+      paused_duration: 0,
+      created_at: '2026-02-01T11:00:00.000Z',
+      updated_at: '2026-02-01T11:00:00.000Z',
+    },
+  ];
+
+  const grouped = groupTimeEntriesByDescription(entries);
+  assert.equal(grouped.length, 1);
+  assert.equal(grouped[0].description, 'Done');
+  assert.equal(grouped[0].totalHours, 1);
 });

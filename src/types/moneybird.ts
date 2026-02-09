@@ -91,7 +91,7 @@ export interface MoneybirdContact {
 export interface MoneybirdTimeEntry {
   id: string;
   started_at: string;
-  ended_at: string;
+  ended_at: string | null;
   description: string;
   billable: boolean;
   user_id: string;
