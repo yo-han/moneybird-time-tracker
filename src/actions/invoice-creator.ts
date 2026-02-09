@@ -35,6 +35,23 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     return path.join(baseDir, imageName);
   }
 
+  private getDefaultTitle(settings: InvoiceSettings): string {
+    const title = settings.displayTitle || 'Invoice';
+    const periodLabel = getPeriodLabel(resolvePeriodKey(settings));
+    return `${title}\n${periodLabel}`;
+  }
+
+  private resetDisplayAfterDelay(
+    action: KeyDownEvent<InvoiceSettings>['action'] | KeyUpEvent<InvoiceSettings>['action'],
+    settings: InvoiceSettings,
+    delayMs: number
+  ): void {
+    setTimeout(async () => {
+      await action.setTitle(this.getDefaultTitle(settings));
+      await action.setImage(this.getImagePath('default'));
+    }, delayMs);
+  }
+
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<InvoiceSettings>): Promise<void> {
     try {
       const settings = ev.payload.settings;
@@ -295,14 +312,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       if (timeEntries.length === 0) {
         await ev.action.setTitle('No hours');
         await ev.action.setImage(this.getImagePath('error'));
-
-        // Reset after 3 seconds
-        setTimeout(async () => {
-          const title = settings.displayTitle || 'Invoice';
-          const periodLabel = getPeriodLabel(resolvePeriodKey(settings));
-          await ev.action.setTitle(`${title}\n${periodLabel}`);
-          await ev.action.setImage(this.getImagePath('default'));
-        }, 3000);
+        this.resetDisplayAfterDelay(ev.action, settings, 3000);
 
         return;
       }
@@ -322,27 +332,13 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       // Show success state
       await ev.action.setTitle('✓ Created');
       await ev.action.setImage(this.getImagePath('success'));
-
-      // Reset after 3 seconds
-      setTimeout(async () => {
-        const title = settings.displayTitle || 'Invoice';
-        const periodLabel = getPeriodLabel(resolvePeriodKey(settings));
-        await ev.action.setTitle(`${title}\n${periodLabel}`);
-        await ev.action.setImage(this.getImagePath('default'));
-      }, 3000);
+      this.resetDisplayAfterDelay(ev.action, settings, 3000);
     } catch (error: unknown) {
       streamDeck.logger.error(`Error creating invoice for instance ${instanceId}:`, error);
 
       await ev.action.setImage(this.getImagePath('error'));
       await ev.action.setTitle('Error');
-
-      // Reset after 3 seconds
-      setTimeout(async () => {
-        const title = settings.displayTitle || 'Invoice';
-        const periodLabel = getPeriodLabel(resolvePeriodKey(settings));
-        await ev.action.setTitle(`${title}\n${periodLabel}`);
-        await ev.action.setImage(this.getImagePath('default'));
-      }, 3000);
+      this.resetDisplayAfterDelay(ev.action, settings, 3000);
     }
   }
 }
