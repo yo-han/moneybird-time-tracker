@@ -36,7 +36,7 @@
   },
   "dependencies": {
     "@elgato/streamdeck": "^2.1.0",
-    "axios": "1.17.0",
+    "axios": "1.18.0",
     "date-fns": "^4.4.0"
   },
   "overrides": {
