@@ -99,21 +99,23 @@ test('invoice creator only fetches hours that are not invoiced yet', async () =>
 
 test('a second press while an invoice is being created is ignored', async () => {
   const { state, creator, event } = setup();
-  let finish: (result: CreatedInvoice) => void = () => {};
-  state.createInvoice = () =>
-    new Promise(resolve => {
-      finish = resolve;
-    });
+  // Every pending create call is released at once, so a missing guard shows up as a
+  // second create call instead of a press that never finishes.
+  const pending: Array<(result: CreatedInvoice) => void> = [];
+  state.createInvoice = () => new Promise(resolve => pending.push(resolve));
 
   await creator.onKeyDown(event as unknown as KeyDownEvent<InvoiceSettings>);
   const first = creator.onKeyUp(event as unknown as KeyUpEvent<InvoiceSettings>);
   // Let the first press reach the create call before pressing again.
   await new Promise(resolve => setImmediate(resolve));
   await creator.onKeyDown(event as unknown as KeyDownEvent<InvoiceSettings>);
-  await creator.onKeyUp(event as unknown as KeyUpEvent<InvoiceSettings>);
+  const second = creator.onKeyUp(event as unknown as KeyUpEvent<InvoiceSettings>);
+  await new Promise(resolve => setImmediate(resolve));
 
-  finish({ invoice: { id: 'inv-1' } as MoneybirdSalesInvoice, unlinkedEntryIds: [] });
-  await first;
+  for (const finish of pending.splice(0)) {
+    finish({ invoice: { id: 'inv-1' } as MoneybirdSalesInvoice, unlinkedEntryIds: [] });
+  }
+  await Promise.all([first, second]);
 
   assert.equal(state.createCount, 1);
 });

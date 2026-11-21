@@ -150,16 +150,18 @@ test('a permanent rejection on stop releases the key', async () => {
 
 test('a second press while the start request is in flight is ignored', async () => {
   const { fake, service, keyDown } = setup({ ...configured });
-  let finishStart: (entry: MoneybirdTimeEntry) => void = () => {};
-  service.state.startTimer = () =>
-    new Promise(resolve => {
-      finishStart = resolve;
-    });
+  // Release every pending start at once, so a missing guard shows up as a second start
+  // call instead of a press that never finishes.
+  const pending: Array<(entry: MoneybirdTimeEntry) => void> = [];
+  service.state.startTimer = () => new Promise(resolve => pending.push(resolve));
 
   const first = keyDown();
-  await keyDown();
-  finishStart({ id: 'entry-1' } as MoneybirdTimeEntry);
-  await first;
+  const second = keyDown();
+  await new Promise(resolve => setImmediate(resolve));
+  for (const finishStart of pending.splice(0)) {
+    finishStart({ id: 'entry-1' } as MoneybirdTimeEntry);
+  }
+  await Promise.all([first, second]);
 
   assert.equal(service.state.startCount, 1);
   assert.equal(fake.current().isRunning, true);
