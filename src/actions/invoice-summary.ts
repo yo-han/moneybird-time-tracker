@@ -11,6 +11,7 @@ import { MoneybirdService } from '../services/moneybird';
 import { InvoiceSettings } from '../types/moneybird';
 import path from 'path';
 import {
+  DEFAULT_HOURLY_RATE,
   calculateTotalHours,
   getPeriodLabel,
   getPeriodRange,
@@ -75,7 +76,7 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
 
       // Calculate total hours and amount
       const totalHours = calculateTotalHours(timeEntries);
-      const hourlyRate = parseHourlyRate(settings.hourlyRate, 75);
+      const hourlyRate = parseHourlyRate(settings.hourlyRate, DEFAULT_HOURLY_RATE);
       const totalAmount = totalHours * hourlyRate;
 
       // Update display based on settings

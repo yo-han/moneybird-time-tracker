@@ -86,12 +86,16 @@ The plugin includes three actions:
 
 `Time Tracker`
 - Single press: start/stop timer
-- Key shows elapsed time while running
+- Key shows elapsed time while running (`42s`, `17m`, `1h05`)
+- If stopping fails, the timer keeps running so the next press can retry
+- Auto-stop ends the entry at the configured limit, also when the computer was asleep
 
 `Invoice Creator`
 - Single press: create invoice for current selection
+- Only billable hours that are not on an invoice yet are invoiced, so pressing twice never bills the same hours twice
 - Long press (`0.5s`): toggle current/previous period
 - Status messages: `Creating...`, `Created`, `No hours`, `Error`
+- `Created` + `Check hours`: the invoice exists, but some hours could not be linked to it; check them in Moneybird before invoicing again
 
 `Invoice Summary`
 - Displays e.g. `Title\nX.Xh = €YYY`
@@ -120,6 +124,8 @@ npm run test
 - `npm run build` -> production build
 - `npm run package` -> package `.streamDeckPlugin`
 - `npm run release` -> lint + typecheck + test + build + package
+
+`com.johan-kuijt.moneybird-timer.sdPlugin/bin/` is build output and is not committed; run `npm run build` (or `npm run watch`) before linking the plugin locally.
 
 ## Troubleshooting
 

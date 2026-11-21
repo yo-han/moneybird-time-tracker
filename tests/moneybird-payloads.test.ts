@@ -6,6 +6,7 @@ import {
   buildStartTimerPayload,
   buildStopTimerPayload,
   buildTimeEntryInvoiceLinkPayload,
+  buildTimeEntriesFilter,
   filterBillableContactEntries,
 } from '../src/services/moneybird/payloads.js';
 
@@ -90,12 +91,12 @@ test('filterBillableContactEntries filters by contact, billable and ended_at', (
     },
   ];
 
-  const filtered = filterBillableContactEntries(
-    entries,
-    'c1'
-  );
+  const filtered = filterBillableContactEntries(entries, 'c1');
 
-  assert.deepEqual(filtered.map(entry => entry.id), ['1']);
+  assert.deepEqual(
+    filtered.map(entry => entry.id),
+    ['1']
+  );
 });
 
 test('buildInvoicePayload groups entries and builds rows', () => {
@@ -148,4 +149,49 @@ test('buildInvoicePayload groups entries and builds rows', () => {
 test('buildTimeEntryInvoiceLinkPayload sets invoice id', () => {
   const payload = buildTimeEntryInvoiceLinkPayload('inv-1');
   assert.equal(payload.time_entry.sales_invoice_id, 'inv-1');
+});
+
+test('buildTimeEntriesFilter filters on period, contact and every state', () => {
+  assert.equal(
+    buildTimeEntriesFilter('123', new Date(2026, 0, 1), new Date(2026, 2, 31)),
+    'period:20260101..20260331,contact_id:123,state:all'
+  );
+});
+
+test('buildTimeEntriesFilter rejects ids that would inject filter terms', () => {
+  for (const contactId of ['', 'abc', '1,state:open', '12 ']) {
+    assert.throws(
+      () => buildTimeEntriesFilter(contactId, new Date(2026, 0, 1), new Date(2026, 0, 31)),
+      /Invalid Moneybird contact id/
+    );
+  }
+});
+
+test('filterBillableContactEntries keeps invoiced entries unless excluded', () => {
+  const base = {
+    contact_id: 'c1',
+    billable: true,
+    ended_at: 'x',
+    description: 'a',
+    started_at: '2026-02-09T10:00:00.000Z',
+    user_id: 'u',
+    project_id: 'p',
+    paused_duration: 0,
+    created_at: 'x',
+    updated_at: 'x',
+  };
+  const entries: MoneybirdTimeEntry[] = [
+    { ...base, id: 'open', sales_invoice_id: null },
+    { ...base, id: 'missing-field' },
+    { ...base, id: 'invoiced', sales_invoice_id: '77' },
+  ];
+
+  assert.deepEqual(
+    filterBillableContactEntries(entries, 'c1').map(entry => entry.id),
+    ['open', 'missing-field', 'invoiced']
+  );
+  assert.deepEqual(
+    filterBillableContactEntries(entries, 'c1', { excludeInvoiced: true }).map(entry => entry.id),
+    ['open', 'missing-field']
+  );
 });

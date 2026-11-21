@@ -1,3 +1,4 @@
+import { format } from 'date-fns';
 import type { MoneybirdTimeEntry, TimerSettings } from '../../types/moneybird.js';
 import { formatMoneybirdDate, groupTimeEntriesByDescription } from '../../utils/moneybird-utils.js';
 
@@ -48,12 +49,37 @@ export function buildStopTimerPayload(now: Date): {
   };
 }
 
+const MONEYBIRD_ID_PATTERN = /^\d+$/;
+
+/**
+ * Builds the `filter` query value for the time entries index. Moneybird filters on contact
+ * and period server side, so pagination only has to walk the entries that matter.
+ * The contact id is validated because it is interpolated into a comma separated filter.
+ */
+export function buildTimeEntriesFilter(contactId: string, startDate: Date, endDate: Date): string {
+  if (!MONEYBIRD_ID_PATTERN.test(contactId)) {
+    throw new Error(`Invalid Moneybird contact id: "${contactId}"`);
+  }
+
+  return `period:${format(startDate, 'yyyyMMdd')}..${format(endDate, 'yyyyMMdd')},contact_id:${contactId},state:all`;
+}
+
+export type BillableEntryFilterOptions = {
+  /** Drop entries that are already on a sales invoice, so they are never billed twice. */
+  excludeInvoiced?: boolean;
+};
+
 export function filterBillableContactEntries(
   entries: MoneybirdTimeEntry[],
-  contactId: string
+  contactId: string,
+  options: BillableEntryFilterOptions = {}
 ): MoneybirdTimeEntry[] {
   return entries.filter(
-    entry => entry.contact_id === contactId && entry.billable === true && entry.ended_at !== null
+    entry =>
+      entry.contact_id === contactId &&
+      entry.billable === true &&
+      entry.ended_at !== null &&
+      !(options.excludeInvoiced && entry.sales_invoice_id)
   );
 }
 

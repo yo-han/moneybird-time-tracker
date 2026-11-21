@@ -42,19 +42,6 @@ export interface InvoiceSettings extends JsonObject {
   isPreview?: boolean;
 }
 
-export interface TimeEntry {
-  id?: string;
-  time_entry: {
-    started_at: string;
-    ended_at?: string;
-    user_id: string;
-    project_id: string;
-    contact_id?: string;
-    description?: string;
-    billable: boolean;
-  };
-}
-
 export interface MoneybirdProject {
   id: string;
   name: string;
@@ -87,6 +74,8 @@ export interface MoneybirdTimeEntry {
   user_id: string;
   contact_id: string;
   project_id: string;
+  /** Set once the entry is on a sales invoice; Moneybird then refuses updates to it. */
+  sales_invoice_id?: string | null;
   paused_duration: number;
   created_at: string;
   updated_at: string;

@@ -12,6 +12,7 @@ import { MoneybirdService } from '../services/moneybird';
 import { InvoiceSettings } from '../types/moneybird';
 import path from 'path';
 import {
+  DEFAULT_HOURLY_RATE,
   getPeriodLabel,
   getPeriodRange,
   parseHourlyRate,
@@ -25,6 +26,7 @@ import { clearTimeoutForKey, setTimeoutForKey } from '../utils/runtime-timers';
 import { setConfigNeededDisplay, setErrorDisplay } from '../utils/action-display';
 import { logError } from '../utils/error-logging';
 import { isKeyActionEvent } from '../utils/key-action';
+import { runExclusivePerKey } from '../utils/in-flight';
 
 type InvoicePluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -38,6 +40,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
   private longPressTriggered: Set<string> = new Set();
   private periodCycleTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private resetDisplayTimeouts: Map<string, NodeJS.Timeout> = new Map();
+  private invoicesInFlight: Set<string> = new Set();
 
   private getImagePath(type: 'default' | 'success' | 'error'): string {
     const baseDir = 'imgs/actions/invoice';
@@ -187,7 +190,9 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     this.longPressTriggered.delete(instanceId);
     const longPressTimeout = setTimeout(() => {
       this.longPressTriggered.add(instanceId);
-      this.cyclePeriod(ev);
+      this.cyclePeriod(ev).catch(error =>
+        logError(streamDeck.logger, 'Error cycling invoice period', error, { instanceId })
+      );
     }, 500); // 500ms = long press
     setTimeoutForKey(this.longPressTimers, instanceId, longPressTimeout);
   }
@@ -204,8 +209,14 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       return;
     }
 
-    // Normal press - create invoice
-    await this.createInvoice(ev);
+    // Normal press - create invoice. A second press while the first invoice is still
+    // being created is ignored, otherwise the same hours would be invoiced twice.
+    const handled = await runExclusivePerKey(this.invoicesInFlight, instanceId, () =>
+      this.createInvoice(ev)
+    );
+    if (!handled) {
+      streamDeck.logger.debug(`Ignoring key press for ${instanceId}: invoice still in progress`);
+    }
   }
 
   private async cyclePeriod(
@@ -267,11 +278,12 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
 
       streamDeck.logger.debug(`Fetching time entries from ${startDate} to ${endDate}`);
 
-      // Fetch time entries for the contact in the selected period
+      // Fetch the not yet invoiced time entries for the contact in the selected period
       const timeEntries = await moneybirdService.getTimeEntriesForContact(
         settings.contactId,
         startDate,
-        endDate
+        endDate,
+        { excludeInvoiced: true }
       );
 
       if (timeEntries.length === 0) {
@@ -283,8 +295,8 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       }
 
       // Create invoice
-      const hourlyRate = parseHourlyRate(settings.hourlyRate, 75);
-      const invoice = await moneybirdService.createInvoiceFromTimeEntries(
+      const hourlyRate = parseHourlyRate(settings.hourlyRate, DEFAULT_HOURLY_RATE);
+      const { invoice, unlinkedEntryIds } = await moneybirdService.createInvoiceFromTimeEntries(
         settings.contactId,
         timeEntries,
         settings.description || `Werkzaamheden ${periodDescription}`,
@@ -292,7 +304,19 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
         hourlyRate
       );
 
-      streamDeck.logger.debug(`Invoice created successfully:`, invoice);
+      streamDeck.logger.info(`Invoice ${invoice.id} created for ${timeEntries.length} entries`);
+
+      if (unlinkedEntryIds.length > 0) {
+        // The invoice exists, but these hours are not marked as invoiced in Moneybird and
+        // would be picked up again by the next invoice. Make that visible on the key.
+        streamDeck.logger.warn(
+          `Invoice ${invoice.id} created, but ${unlinkedEntryIds.length} time entries are not linked`
+        );
+        await ev.action.setTitle('⚠️ Created\nCheck hours');
+        await ev.action.setImage(this.getImagePath('error'));
+        this.resetDisplayAfterDelay(ev.action, settings, 5000, instanceId);
+        return;
+      }
 
       // Show success state
       await ev.action.setTitle('✓ Created');
