@@ -14,4 +14,6 @@ export type MoneybirdHttpClient = {
 export type MoneybirdServiceDependencies = {
   httpClient?: MoneybirdHttpClient;
   logger?: MoneybirdLogger;
+  /** Waits between retries; injectable so tests do not sleep. */
+  sleep?: (ms: number) => Promise<void>;
 };

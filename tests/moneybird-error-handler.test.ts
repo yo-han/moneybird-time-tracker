@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   MoneybirdApiError,
   isMoneybirdNotFound,
+  isPermanentRequestError,
   throwMoneybirdApiError,
 } from '../src/services/moneybird/error-handler.js';
 
@@ -102,4 +103,39 @@ test('rethrows an existing MoneybirdApiError unchanged', () => {
 test('isMoneybirdNotFound is false for other errors', () => {
   assert.equal(isMoneybirdNotFound(new MoneybirdApiError('x', 500)), false);
   assert.equal(isMoneybirdNotFound(new Error('x')), false);
+});
+
+test('reads the first message of a validation error object', () => {
+  const { logger } = createLogger();
+  assert.throws(
+    () =>
+      throwMoneybirdApiError(logger, {
+        response: { status: 422, data: { error: { contact_id: ['is required'] } } },
+      }),
+    /Request rejected by Moneybird \(422\): contact_id is required/
+  );
+});
+
+test('isPermanentRequestError separates rejected requests from retryable failures', () => {
+  const cases: Array<[number | undefined, boolean]> = [
+    [400, true],
+    [404, true],
+    [422, true],
+    [401, false],
+    [403, false],
+    [408, false],
+    [429, false],
+    [500, false],
+    [503, false],
+    [undefined, false],
+  ];
+
+  for (const [status, permanent] of cases) {
+    assert.equal(
+      isPermanentRequestError(new MoneybirdApiError('x', status)),
+      permanent,
+      `status ${status}`
+    );
+  }
+  assert.equal(isPermanentRequestError(new Error('x')), false);
 });

@@ -7,3 +7,6 @@ com.johan-kuijt.moneybird-timer-v0.1.streamDeckPlugin
 /com.johan-kuijt.moneybird-timer.sdPlugin/bin/
 /dist/
 .tmp-tests/
+
+# Stream Deck SDK logger output from local test runs
+/logs/

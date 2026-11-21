@@ -20,13 +20,48 @@ export function isMoneybirdNotFound(error: unknown): boolean {
   return error instanceof MoneybirdApiError && error.status === 404;
 }
 
+export function isMoneybirdRateLimited(error: unknown): boolean {
+  return error instanceof MoneybirdApiError && error.status === 429;
+}
+
+/** Statuses in the 4xx range that can succeed when the same request is sent again. */
+const RETRYABLE_CLIENT_STATUSES = new Set([401, 403, 408, 429]);
+
+/**
+ * True when Moneybird rejected the request itself (404, 422, ...), so sending it again
+ * cannot succeed. Network errors, auth problems, rate limits and 5xx are not permanent.
+ */
+export function isPermanentRequestError(error: unknown): boolean {
+  if (!(error instanceof MoneybirdApiError) || error.status === undefined) {
+    return false;
+  }
+  return error.status >= 400 && error.status < 500 && !RETRYABLE_CLIENT_STATUSES.has(error.status);
+}
+
+/**
+ * Moneybird sends `error` either as a string or, for validation failures, as an object
+ * of field -> messages. Returns the first readable message, e.g. "contact_id is required".
+ */
 function extractMoneybirdErrorText(data: unknown): string | undefined {
   if (typeof data !== 'object' || data === null) {
     return undefined;
   }
 
   const { error } = data as { error?: unknown };
-  return typeof error === 'string' && error.trim() !== '' ? error.trim() : undefined;
+  if (typeof error === 'string') {
+    return error.trim() || undefined;
+  }
+
+  if (typeof error === 'object' && error !== null) {
+    for (const [field, messages] of Object.entries(error)) {
+      const first = Array.isArray(messages) ? messages[0] : messages;
+      if (typeof first === 'string' && first.trim() !== '') {
+        return `${field} ${first.trim()}`;
+      }
+    }
+  }
+
+  return undefined;
 }
 
 function describeResponseStatus(status: number, detail: string | undefined): string {
@@ -50,9 +85,10 @@ function describeResponseStatus(status: number, detail: string | undefined): str
   return `Server error: ${status}`;
 }
 
-export function throwMoneybirdApiError(logger: MoneybirdLogger, error: unknown): never {
+/** Maps any request failure to a MoneybirdApiError and logs it (without secrets). */
+export function toMoneybirdApiError(logger: MoneybirdLogger, error: unknown): MoneybirdApiError {
   if (error instanceof MoneybirdApiError) {
-    throw error;
+    return error;
   }
 
   const axiosError = error as AxiosError;
@@ -62,17 +98,21 @@ export function throwMoneybirdApiError(logger: MoneybirdLogger, error: unknown):
     const detail = extractMoneybirdErrorText(axiosError.response.data);
 
     logger.error('Moneybird API Error Response', { status, detail });
-    throw new MoneybirdApiError(describeResponseStatus(status, detail), status);
+    return new MoneybirdApiError(describeResponseStatus(status, detail), status);
   }
 
   if (axiosError.request) {
     logger.error('No response from Moneybird API');
-    throw new MoneybirdApiError(
+    return new MoneybirdApiError(
       'No response received from Moneybird API. Check your internet connection.'
     );
   }
 
   const errorDetails = getErrorDetails(error);
   logger.error('Moneybird API Request Error', errorDetails);
-  throw new MoneybirdApiError(`Request setup error: ${errorDetails.message}`);
+  return new MoneybirdApiError(`Request setup error: ${errorDetails.message}`);
+}
+
+export function throwMoneybirdApiError(logger: MoneybirdLogger, error: unknown): never {
+  throw toMoneybirdApiError(logger, error);
 }

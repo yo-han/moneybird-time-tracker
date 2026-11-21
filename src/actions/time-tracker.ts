@@ -8,32 +8,32 @@ import streamDeck, {
   WillDisappearEvent,
   DidReceiveSettingsEvent,
 } from '@elgato/streamdeck';
-import { MoneybirdService } from '../services/moneybird';
-import { isMoneybirdNotFound } from '../services/moneybird/error-handler';
+import { MoneybirdService } from '../services/moneybird.js';
+import { isPermanentRequestError } from '../services/moneybird/error-handler.js';
 import {
   TimerSettings,
   projectToJson,
   administrationToJson,
   userToJson,
   contactToJson,
-} from '../types/moneybird';
+} from '../types/moneybird.js';
 import path from 'path';
 import {
   calculateRemainingAutoStopHours,
   normalizeAutoStopHours,
   resolveAutoStopEndTime,
-} from '../utils/auto-stop-utils';
+} from '../utils/auto-stop-utils.js';
 import {
   clearIntervalForKey,
   clearTimeoutForKey,
   setIntervalForKey,
   setTimeoutForKey,
-} from '../utils/runtime-timers';
-import { setConfigNeededDisplay, setErrorDisplay } from '../utils/action-display';
-import { logError } from '../utils/error-logging';
-import { isKeyActionEvent } from '../utils/key-action';
-import { formatElapsedTime } from '../utils/elapsed-time';
-import { runExclusivePerKey } from '../utils/in-flight';
+} from '../utils/runtime-timers.js';
+import { setConfigNeededDisplay, setErrorDisplay } from '../utils/action-display.js';
+import { logError } from '../utils/error-logging.js';
+import { isKeyActionEvent } from '../utils/key-action.js';
+import { formatElapsedTime } from '../utils/elapsed-time.js';
+import { runExclusivePerKey } from '../utils/in-flight.js';
 
 type TimerPluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -42,6 +42,17 @@ type TimerPluginPayload = {
 };
 
 type TimerKeyAction = KeyAction<TimerSettings>;
+
+type TimerService = Pick<
+  MoneybirdService,
+  'getAdministrations' | 'getProjects' | 'getUsers' | 'getContacts' | 'startTimer' | 'stopTimer'
+>;
+
+export type CreateTimerService = (apiKey: string, administrationId?: string) => TimerService;
+
+function createMoneybirdService(apiKey: string, administrationId?: string): TimerService {
+  return new MoneybirdService(apiKey, administrationId);
+}
 
 const MS_PER_HOUR = 60 * 60 * 1000;
 const DISPLAY_REFRESH_MS = 1000;
@@ -66,6 +77,10 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   private autoStopTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private displayResetTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private requestsInFlight: Set<string> = new Set();
+
+  constructor(private readonly createService: CreateTimerService = createMoneybirdService) {
+    super();
+  }
 
   private getImagePath(type: 'default' | 'active' | 'error'): string {
     return path.join('imgs/actions/timer', `key_${type}.png`);
@@ -125,7 +140,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     }
 
     try {
-      const moneybirdService = new MoneybirdService(currentSettings.apiKey, administrationId);
+      const moneybirdService = this.createService(currentSettings.apiKey, administrationId);
 
       const [rawProjects, rawUsers, rawContacts] = await Promise.all([
         moneybirdService.getProjects(),
@@ -170,7 +185,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     }
 
     try {
-      const moneybirdService = new MoneybirdService(apiKey);
+      const moneybirdService = this.createService(apiKey);
       const rawAdministrations = await moneybirdService.getAdministrations();
       streamDeck.logger.debug(`Fetched ${rawAdministrations.length} administrations`);
 
@@ -234,7 +249,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       return;
     }
 
-    const moneybirdService = new MoneybirdService(settings.apiKey, settings.administrationId);
+    const moneybirdService = this.createService(settings.apiKey, settings.administrationId);
 
     if (settings.isRunning) {
       await this.stopTimer(action, settings, moneybirdService);
@@ -246,7 +261,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   private async startTimer(
     action: TimerKeyAction,
     settings: TimerSettings,
-    moneybirdService: MoneybirdService
+    moneybirdService: TimerService
   ): Promise<void> {
     const instanceId = action.id;
 
@@ -274,7 +289,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   private async stopTimer(
     action: TimerKeyAction,
     settings: TimerSettings,
-    moneybirdService: MoneybirdService
+    moneybirdService: TimerService
   ): Promise<void> {
     const instanceId = action.id;
 
@@ -285,7 +300,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     }
 
     try {
-      await moneybirdService.stopTimer(settings.timeEntryId);
+      await moneybirdService.stopTimer(settings.timeEntryId, this.resolveStopTime(settings));
       await this.resetToIdle(action, settings);
       streamDeck.logger.debug(`Timer stopped for instance ${instanceId}`);
     } catch (error: unknown) {
@@ -294,16 +309,19 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         timeEntryId: settings.timeEntryId,
       });
 
-      if (isMoneybirdNotFound(error)) {
-        // The entry no longer exists in Moneybird; there is nothing left to stop.
+      if (isPermanentRequestError(error)) {
+        // Moneybird refuses this entry for good (deleted, invoiced or invalid): retrying
+        // cannot stop it, so release the key. The log above names the entry to check.
         await this.resetToIdle(action, settings);
         await this.flashError(action, () => this.showIdle(action, settings));
         return;
       }
 
-      // The entry is still running in Moneybird. Keep its id so the next press can retry,
-      // instead of forgetting it and leaving an orphaned running entry behind.
-      await this.flashError(action, () => this.showRunning(action, settings));
+      // Network, auth, rate limit or server error: the entry may still be running in
+      // Moneybird. Keep its id so the next press can retry instead of orphaning it.
+      await this.flashError(action, () =>
+        this.showRunning(action, settings, { scheduleAutoStop: false })
+      );
     }
   }
 
@@ -318,8 +336,31 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     await action.setTitle(this.getIdleTitle(settings));
   }
 
-  /** Shows the running state and (re)starts the per-second refresh and auto-stop. */
-  private async showRunning(action: TimerKeyAction, settings: TimerSettings): Promise<void> {
+  /**
+   * Ends a manual stop at the auto-stop limit when that has already passed, e.g. because
+   * the machine slept through the auto-stop timeout; otherwise now.
+   */
+  private resolveStopTime(settings: TimerSettings): Date {
+    const autoStopHours = settings.autoStopEnabled
+      ? normalizeAutoStopHours(settings.autoStopHours)
+      : null;
+
+    if (autoStopHours === null || !settings.startTime) {
+      return new Date();
+    }
+    return resolveAutoStopEndTime(settings.startTime, autoStopHours);
+  }
+
+  /**
+   * Shows the running state and (re)starts the per-second refresh. Auto-stop is scheduled
+   * too, except when redrawing after a failed stop: with the limit already passed that
+   * would retry the failing request every second.
+   */
+  private async showRunning(
+    action: TimerKeyAction,
+    settings: TimerSettings,
+    { scheduleAutoStop = true }: { scheduleAutoStop?: boolean } = {}
+  ): Promise<void> {
     const instanceId = action.id;
 
     await action.setImage(this.getImagePath('active'));
@@ -332,7 +373,9 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     }, DISPLAY_REFRESH_MS);
     setIntervalForKey(this.updateIntervals, instanceId, interval);
 
-    this.scheduleAutoStop(action, settings);
+    if (scheduleAutoStop) {
+      this.scheduleAutoStop(action, settings);
+    }
   }
 
   /**
@@ -412,7 +455,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     const endedAt = resolveAutoStopEndTime(settings.startTime, autoStopHours);
 
     try {
-      const moneybirdService = new MoneybirdService(settings.apiKey, settings.administrationId);
+      const moneybirdService = this.createService(settings.apiKey, settings.administrationId);
       await moneybirdService.stopTimer(settings.timeEntryId, endedAt);
     } catch (error) {
       logError(streamDeck.logger, 'Error during auto-stop', error, {
@@ -420,9 +463,12 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         timeEntryId: settings.timeEntryId,
       });
 
-      if (!isMoneybirdNotFound(error)) {
-        // Still running in Moneybird: keep the state so a key press can stop it later.
-        await this.flashError(action, () => this.showRunning(action, settings));
+      if (!isPermanentRequestError(error)) {
+        // Possibly still running in Moneybird: keep the state so a key press can stop it.
+        // No automatic retry; the manual stop ends the entry at the same limit.
+        await this.flashError(action, () =>
+          this.showRunning(action, settings, { scheduleAutoStop: false })
+        );
         return;
       }
     }

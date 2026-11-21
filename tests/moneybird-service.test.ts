@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  MONEYBIRD_LINK_ATTEMPTS,
+  MONEYBIRD_LINK_CONCURRENCY,
   MONEYBIRD_MAX_PAGES,
   MONEYBIRD_PAGE_SIZE,
   MONEYBIRD_REQUEST_TIMEOUT_MS,
@@ -396,4 +398,145 @@ test('createInvoiceFromTimeEntries returns no unlinked ids when every link succe
   );
 
   assert.deepEqual(result.unlinkedEntryIds, []);
+});
+
+test('creating requests carry no timeout, reads and updates do', async () => {
+  const http = createHttpClient();
+  http.responses.post = { id: 'new' };
+  http.responses.get = [billableEntry('1')];
+  http.responses.patch = billableEntry('1');
+  const service = createService(http);
+
+  await service.startTimer({
+    apiKey: 'secret-key',
+    administrationId: 'admin-1',
+    projectId: 'p',
+    userId: 'u',
+  });
+  await service.createInvoiceFromTimeEntries('111', [billableEntry('1')], 'Feb', undefined, 90);
+  await service.getTimeEntriesForContact('111', FEB_START, FEB_END);
+
+  for (const call of http.calls) {
+    const timeout = (call.config as { timeout?: number }).timeout;
+    if (call.method === 'post') {
+      assert.equal(timeout, undefined, `${call.method} ${call.url}`);
+    } else {
+      assert.equal(timeout, MONEYBIRD_REQUEST_TIMEOUT_MS, `${call.method} ${call.url}`);
+    }
+  }
+  assert.equal(http.calls.filter(call => call.method === 'post').length, 2);
+});
+
+test('createInvoiceFromTimeEntries fails without an invoice id and links nothing', async () => {
+  const http = createHttpClient();
+  http.responses.post = {};
+
+  await assert.rejects(
+    createService(http).createInvoiceFromTimeEntries(
+      '111',
+      [billableEntry('1')],
+      'Feb',
+      undefined,
+      90
+    ),
+    /did not return an id for the new invoice/
+  );
+  assert.equal(http.calls.filter(call => call.method === 'patch').length, 0);
+});
+
+function createServiceWithSleep(http: ReturnType<typeof createHttpClient>, delays: number[]) {
+  return new MoneybirdService('secret-key', 'admin-1', {
+    httpClient: http.client,
+    logger: createLogger(),
+    sleep: async ms => {
+      delays.push(ms);
+    },
+  });
+}
+
+test('linking retries a rate limited entry with backoff', async () => {
+  const http = createHttpClient();
+  http.responses.post = { id: 'invoice-1' };
+  let attempts = 0;
+  http.failures.patch = () => (++attempts <= 2 ? { response: { status: 429 } } : undefined);
+  const delays: number[] = [];
+
+  const result = await createServiceWithSleep(http, delays).createInvoiceFromTimeEntries(
+    '111',
+    [billableEntry('1')],
+    'Feb',
+    undefined,
+    90
+  );
+
+  assert.deepEqual(result.unlinkedEntryIds, []);
+  assert.equal(attempts, 3);
+  assert.deepEqual(delays, [2000, 4000]);
+});
+
+test('linking gives up after the attempt limit and reports the entry', async () => {
+  const http = createHttpClient();
+  http.responses.post = { id: 'invoice-1' };
+  http.failures.patch = () => ({ response: { status: 429 } });
+  const delays: number[] = [];
+
+  const result = await createServiceWithSleep(http, delays).createInvoiceFromTimeEntries(
+    '111',
+    [billableEntry('1')],
+    'Feb',
+    undefined,
+    90
+  );
+
+  assert.deepEqual(result.unlinkedEntryIds, ['1']);
+  assert.equal(http.calls.filter(call => call.method === 'patch').length, MONEYBIRD_LINK_ATTEMPTS);
+  assert.equal(delays.length, MONEYBIRD_LINK_ATTEMPTS - 1);
+});
+
+test('linking does not retry other errors', async () => {
+  const http = createHttpClient();
+  http.responses.post = { id: 'invoice-1' };
+  http.failures.patch = () => ({ response: { status: 500 } });
+  const delays: number[] = [];
+
+  const result = await createServiceWithSleep(http, delays).createInvoiceFromTimeEntries(
+    '111',
+    [billableEntry('1')],
+    'Feb',
+    undefined,
+    90
+  );
+
+  assert.deepEqual(result.unlinkedEntryIds, ['1']);
+  assert.equal(http.calls.filter(call => call.method === 'patch').length, 1);
+  assert.deepEqual(delays, []);
+});
+
+test('linking keeps at most a few requests in flight and links every entry', async () => {
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const linked: string[] = [];
+  const client = {
+    get: async <T>() => ({ data: [] as T }),
+    post: async <T>() => ({ data: { id: 'invoice-1' } as T }),
+    patch: async <T>(url: string) => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise(resolve => setImmediate(resolve));
+      inFlight--;
+      linked.push(url);
+      return { data: {} as T };
+    },
+  };
+  const entries = Array.from({ length: 25 }, (_, i) => billableEntry(String(i)));
+
+  const result = await new MoneybirdService('secret-key', 'admin-1', {
+    httpClient: client,
+    logger: createLogger(),
+  }).createInvoiceFromTimeEntries('111', entries, 'Feb', undefined, 90);
+
+  assert.deepEqual(result.unlinkedEntryIds, []);
+  assert.equal(linked.length, 25);
+  assert.equal(new Set(linked).size, 25);
+  assert.equal(maxInFlight, MONEYBIRD_LINK_CONCURRENCY);
 });

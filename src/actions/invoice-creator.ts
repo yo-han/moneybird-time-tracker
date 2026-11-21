@@ -8,8 +8,8 @@ import streamDeck, {
   SendToPluginEvent,
   DidReceiveSettingsEvent,
 } from '@elgato/streamdeck';
-import { MoneybirdService } from '../services/moneybird';
-import { InvoiceSettings } from '../types/moneybird';
+import { MoneybirdService } from '../services/moneybird.js';
+import { InvoiceSettings } from '../types/moneybird.js';
 import path from 'path';
 import {
   DEFAULT_HOURLY_RATE,
@@ -17,22 +17,33 @@ import {
   getPeriodRange,
   parseHourlyRate,
   resolvePeriodKey,
-} from '../utils/invoice-utils';
+} from '../utils/invoice-utils.js';
 import {
   applyInvoiceAdministrationChange,
   applyInvoiceGlobalSettings,
-} from '../utils/invoice-action-settings';
-import { clearTimeoutForKey, setTimeoutForKey } from '../utils/runtime-timers';
-import { setConfigNeededDisplay, setErrorDisplay } from '../utils/action-display';
-import { logError } from '../utils/error-logging';
-import { isKeyActionEvent } from '../utils/key-action';
-import { runExclusivePerKey } from '../utils/in-flight';
+} from '../utils/invoice-action-settings.js';
+import { clearTimeoutForKey, setTimeoutForKey } from '../utils/runtime-timers.js';
+import { setConfigNeededDisplay, setErrorDisplay } from '../utils/action-display.js';
+import { logError } from '../utils/error-logging.js';
+import { isKeyActionEvent } from '../utils/key-action.js';
+import { runExclusivePerKey } from '../utils/in-flight.js';
 
 type InvoicePluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
   apiKey?: string;
   administrationId?: string;
 };
+
+type InvoiceService = Pick<
+  MoneybirdService,
+  'getTimeEntriesForContact' | 'createInvoiceFromTimeEntries'
+>;
+
+export type CreateInvoiceService = (apiKey: string, administrationId: string) => InvoiceService;
+
+function createMoneybirdService(apiKey: string, administrationId: string): InvoiceService {
+  return new MoneybirdService(apiKey, administrationId);
+}
 
 @action({ UUID: 'com.johan-kuijt.moneybird-timer.invoice-creator' })
 export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
@@ -41,6 +52,10 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
   private periodCycleTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private resetDisplayTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private invoicesInFlight: Set<string> = new Set();
+
+  constructor(private readonly createService: CreateInvoiceService = createMoneybirdService) {
+    super();
+  }
 
   private getImagePath(type: 'default' | 'success' | 'error'): string {
     const baseDir = 'imgs/actions/invoice';
@@ -266,7 +281,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     const settings = ev.payload.settings;
     const instanceId = ev.action.id;
 
-    const moneybirdService = new MoneybirdService(settings.apiKey, settings.administrationId);
+    const moneybirdService = this.createService(settings.apiKey, settings.administrationId);
 
     try {
       // Show processing state

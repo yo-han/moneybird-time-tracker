@@ -9,7 +9,12 @@ import {
   MoneybirdTimeEntry,
   MoneybirdSalesInvoice,
 } from '../types/moneybird.js';
-import { MoneybirdApiError, throwMoneybirdApiError } from './moneybird/error-handler.js';
+import {
+  MoneybirdApiError,
+  isMoneybirdRateLimited,
+  throwMoneybirdApiError,
+  toMoneybirdApiError,
+} from './moneybird/error-handler.js';
 import {
   buildInvoicePayload,
   buildStartTimerPayload,
@@ -36,7 +41,17 @@ import type {
 export const MONEYBIRD_PAGE_SIZE = 100;
 /** Upper bound on pages per listing, so a misbehaving endpoint cannot loop forever. */
 export const MONEYBIRD_MAX_PAGES = 50;
+/**
+ * Timeout for reads and idempotent updates. Creating requests (POST) get none: a timed out
+ * POST may still have created the time entry or invoice, and treating it as a failure
+ * invites a duplicate on the next press.
+ */
 export const MONEYBIRD_REQUEST_TIMEOUT_MS = 15_000;
+/** Concurrent PATCH requests when linking time entries to a new invoice. */
+export const MONEYBIRD_LINK_CONCURRENCY = 4;
+/** Attempts per link request when Moneybird answers 429. */
+export const MONEYBIRD_LINK_ATTEMPTS = 4;
+const RATE_LIMIT_BACKOFF_MS = 2_000;
 
 type QueryParams = Record<string, string | number>;
 
@@ -52,6 +67,7 @@ export class MoneybirdService {
   private readonly baseUrl = 'https://moneybird.com/api/v2';
   private readonly httpClient: MoneybirdHttpClient;
   private readonly logger: MoneybirdLogger;
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(
     private readonly apiKey: string,
@@ -64,17 +80,27 @@ export class MoneybirdService {
 
     this.httpClient = dependencies.httpClient ?? axios;
     this.logger = dependencies.logger ?? streamDeck.logger;
+    this.sleep = dependencies.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  }
+
+  private headers() {
+    return {
+      Authorization: `Bearer ${this.apiKey}`,
+      'Content-Type': 'application/json',
+    };
   }
 
   private requestConfig(params?: QueryParams) {
     return {
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
+      headers: this.headers(),
       timeout: MONEYBIRD_REQUEST_TIMEOUT_MS,
       ...(params ? { params } : {}),
     };
+  }
+
+  /** Config for creating requests: no timeout, see MONEYBIRD_REQUEST_TIMEOUT_MS. */
+  private createRequestConfig() {
+    return { headers: this.headers() };
   }
 
   private requireAdministrationId(): string {
@@ -200,7 +226,7 @@ export class MoneybirdService {
       const response = await this.httpClient.post<MoneybirdTimeEntry>(
         url,
         payload,
-        this.requestConfig()
+        this.createRequestConfig()
       );
 
       if (!response.data?.id) {
@@ -287,8 +313,12 @@ export class MoneybirdService {
       const response = await this.httpClient.post<MoneybirdSalesInvoice>(
         this.administrationUrl('sales_invoices.json'),
         invoiceData,
-        this.requestConfig()
+        this.createRequestConfig()
       );
+
+      if (!response.data?.id) {
+        throw new MoneybirdApiError('Moneybird did not return an id for the new invoice');
+      }
       invoice = response.data;
     } catch (error) {
       return throwMoneybirdApiError(this.logger, error);
@@ -300,33 +330,62 @@ export class MoneybirdService {
     return { invoice, unlinkedEntryIds };
   }
 
+  /** Links one entry, waiting and retrying while Moneybird answers 429. */
+  private async linkTimeEntry(entryId: string, invoiceId: string): Promise<void> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await this.httpClient.patch(
+          this.administrationUrl(`time_entries/${entryId}.json`),
+          buildTimeEntryInvoiceLinkPayload(invoiceId),
+          this.requestConfig()
+        );
+        return;
+      } catch (error) {
+        const apiError = toMoneybirdApiError(this.logger, error);
+        if (!isMoneybirdRateLimited(apiError) || attempt >= MONEYBIRD_LINK_ATTEMPTS) {
+          throw apiError;
+        }
+        await this.sleep(RATE_LIMIT_BACKOFF_MS * 2 ** (attempt - 1));
+      }
+    }
+  }
+
+  /**
+   * Links the entries with a few requests at a time, so a large invoice does not run into
+   * the rate limit. Returns the ids that are still unlinked after retries.
+   */
   private async linkTimeEntriesToInvoice(
     timeEntries: MoneybirdTimeEntry[],
     invoiceId: string
   ): Promise<string[]> {
-    const results = await Promise.allSettled(
-      timeEntries.map(entry =>
-        this.httpClient.patch(
-          this.administrationUrl(`time_entries/${entry.id}.json`),
-          buildTimeEntryInvoiceLinkPayload(invoiceId),
-          this.requestConfig()
-        )
-      )
-    );
+    const unlinkedEntryIds: string[] = [];
+    let firstFailure: unknown;
+    let next = 0;
 
-    const unlinkedEntryIds = timeEntries
-      .filter((_entry, index) => results[index]?.status === 'rejected')
-      .map(entry => entry.id);
+    const worker = async (): Promise<void> => {
+      while (next < timeEntries.length) {
+        const entry = timeEntries[next++];
+        if (!entry) {
+          return;
+        }
+        try {
+          await this.linkTimeEntry(entry.id, invoiceId);
+        } catch (error) {
+          unlinkedEntryIds.push(entry.id);
+          firstFailure ??= error;
+        }
+      }
+    };
+
+    const workerCount = Math.min(MONEYBIRD_LINK_CONCURRENCY, timeEntries.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
     if (unlinkedEntryIds.length > 0) {
-      const firstFailure = results.find(
-        (result): result is PromiseRejectedResult => result.status === 'rejected'
-      );
       this.logger.error('Error linking time entries to invoice', {
         invoiceId,
         unlinkedEntryIds,
         entryCount: timeEntries.length,
-        ...getErrorDetails(firstFailure?.reason),
+        ...getErrorDetails(firstFailure),
       });
     } else {
       this.logger.debug(`Linked ${timeEntries.length} time entries to invoice ${invoiceId}`);
