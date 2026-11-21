@@ -4,7 +4,7 @@ import { execSync } from 'child_process';
 import { createReadStream, createWriteStream, promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import archiver from 'archiver';
+import { ZipArchive } from 'archiver';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -64,7 +64,7 @@ async function packagePlugin() {
     }
 
     const output = createWriteStream(outputPath);
-    const archive = archiver('zip', {
+    const archive = new ZipArchive({
       zlib: { level: 9 } // Maximum compression
     });
 
