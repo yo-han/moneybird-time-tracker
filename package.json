@@ -45,7 +45,10 @@
     "picomatch": "^4.0.4",
     "flatted": "^3.4.2",
     "tar": "^7.5.22",
-    "fast-uri": "3.1.2"
+    "fast-uri": "3.1.9",
+    "readdir-glob": {
+      "minimatch": "^11.0.1"
+    }
   },
   "engines": {
     "node": ">=24 <25"
