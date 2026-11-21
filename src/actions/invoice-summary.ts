@@ -24,6 +24,7 @@ import {
 import { clearIntervalForKey, setIntervalForKey } from '../utils/runtime-timers';
 import { setActionDisplay } from '../utils/action-display';
 import { logError } from '../utils/error-logging';
+import { isKeyActionEvent } from '../utils/key-action';
 
 type InvoicePluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -100,6 +101,11 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
   }
 
   override async onWillAppear(ev: WillAppearEvent<InvoiceSettings>): Promise<void> {
+    if (!isKeyActionEvent(ev)) {
+      streamDeck.logger.warn(`Ignoring non-key action for instance ${ev.action.id}`);
+      return;
+    }
+
     const instanceId = ev.action.id;
     await this.updateSummaryFromAction(ev.action);
 
@@ -125,6 +131,11 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
 
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<InvoiceSettings>): Promise<void> {
     streamDeck.logger.debug('[InvoiceSummary] Settings received');
+    if (!isKeyActionEvent(ev)) {
+      streamDeck.logger.warn(`Ignoring non-key action for instance ${ev.action.id}`);
+      return;
+    }
+
     await this.updateSummaryFromAction(ev.action);
   }
 
@@ -153,7 +164,7 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
       logger: streamDeck.logger,
     });
 
-    if (updated) {
+    if (updated && isKeyActionEvent(ev)) {
       // Update summary after loading new data
       await this.updateSummaryFromAction(ev.action);
     }
