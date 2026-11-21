@@ -1,11 +1,6 @@
 // JsonObject and JsonValue types (removed from @elgato/streamdeck v2.0.1)
 export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+  string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue | undefined };
 
 export interface TimerSettings extends JsonObject {
@@ -35,12 +30,7 @@ export interface InvoiceSettings extends JsonObject {
   periodType?: 'month' | 'quarter' | 'year';
   periodRange?: 'current' | 'last';
   period?:
-    | 'current_month'
-    | 'last_month'
-    | 'current_quarter'
-    | 'last_quarter'
-    | 'current_year'
-    | 'custom';
+    'current_month' | 'last_month' | 'current_quarter' | 'last_quarter' | 'current_year' | 'custom';
   customStartDate?: string;
   customEndDate?: string;
   description?: string;
