@@ -159,6 +159,17 @@
             }
         }
 
+        // Names come from Moneybird (contacts, projects, users). Escape them before they are
+        // put into innerHTML, so a name like <img onerror=...> renders as text, not markup.
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
         async function updateDropdown(elementId, items = {}, valueKey = 'id', nameKey = 'name', defaultText = 'Select an option') {
             try {
                 const select = document.getElementById(elementId);
@@ -195,7 +206,7 @@
                 }
 
                 const optionsHtml = options.map(opt => 
-                    `<option value="${opt.value}">${opt.text}</option>`
+                    `<option value="${escapeHtml(opt.value)}">${escapeHtml(opt.text)}</option>`
                 ).join('');
 
                 select.innerHTML = optionsHtml;

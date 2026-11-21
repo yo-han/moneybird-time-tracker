@@ -7,24 +7,25 @@ import streamDeck, {
   SendToPluginEvent,
   DidReceiveSettingsEvent,
 } from '@elgato/streamdeck';
-import { MoneybirdService } from '../services/moneybird';
-import { InvoiceSettings } from '../types/moneybird';
+import { MoneybirdService } from '../services/moneybird.js';
+import { InvoiceSettings } from '../types/moneybird.js';
 import path from 'path';
 import {
+  DEFAULT_HOURLY_RATE,
   calculateTotalHours,
   getPeriodLabel,
   getPeriodRange,
   parseHourlyRate,
   resolvePeriodKey,
-} from '../utils/invoice-utils';
+} from '../utils/invoice-utils.js';
 import {
   applyInvoiceAdministrationChange,
   applyInvoiceGlobalSettings,
-} from '../utils/invoice-action-settings';
-import { clearIntervalForKey, setIntervalForKey } from '../utils/runtime-timers';
-import { setActionDisplay } from '../utils/action-display';
-import { logError } from '../utils/error-logging';
-import { isKeyActionEvent } from '../utils/key-action';
+} from '../utils/invoice-action-settings.js';
+import { clearIntervalForKey, setIntervalForKey } from '../utils/runtime-timers.js';
+import { setActionDisplay } from '../utils/action-display.js';
+import { logError } from '../utils/error-logging.js';
+import { isKeyActionEvent } from '../utils/key-action.js';
 
 type InvoicePluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -75,7 +76,7 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
 
       // Calculate total hours and amount
       const totalHours = calculateTotalHours(timeEntries);
-      const hourlyRate = parseHourlyRate(settings.hourlyRate, 75);
+      const hourlyRate = parseHourlyRate(settings.hourlyRate, DEFAULT_HOURLY_RATE);
       const totalAmount = totalHours * hourlyRate;
 
       // Update display based on settings

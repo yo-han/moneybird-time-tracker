@@ -3,5 +3,10 @@ node_modules
 com.johan-kuijt.moneybird-timer.streamDeckPlugin
 com.johan-kuijt.moneybird-timer-v0.1.streamDeckPlugin
 .claude/
-/com.johan-kuijt.moneybird-timer.sdPlugin/bin/*.map
+# Build output: produced by `npm run build`, never committed
+/com.johan-kuijt.moneybird-timer.sdPlugin/bin/
+/dist/
 .tmp-tests/
+
+# Stream Deck SDK logger output from local test runs
+/logs/

@@ -122,7 +122,13 @@ export function getPeriodRange(
   }
 }
 
-export function parseHourlyRate(hourlyRate: number | string | undefined, fallback = 75): number {
+/** Rate used when the action has no valid hourly rate configured. */
+export const DEFAULT_HOURLY_RATE = 75;
+
+export function parseHourlyRate(
+  hourlyRate: number | string | undefined,
+  fallback = DEFAULT_HOURLY_RATE
+): number {
   const parsed = parseFloat(String(hourlyRate).replace(',', '.'));
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }

@@ -6,7 +6,7 @@
     "lint": "eslint \"src/**/*.ts\"",
     "lint:fix": "eslint \"src/**/*.ts\" --fix",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test .tmp-tests/tests/**/*.test.js",
+    "test": "tsc -p tsconfig.test.json && node --test --test-timeout=30000 .tmp-tests/tests/**/*.test.js",
     "format": "prettier --write \"src/**/*.{ts,tsx,json}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,json}\"",
     "bump-version": "node scripts/bump-version.js",
