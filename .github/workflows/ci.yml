@@ -42,3 +42,8 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Package
+        run: |
+          npm run package:no-bump
+          test -s dist/com.johan-kuijt.moneybird-timer.streamDeckPlugin
