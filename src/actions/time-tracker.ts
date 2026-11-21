@@ -1,5 +1,6 @@
 import streamDeck, {
   action,
+  KeyAction,
   KeyDownEvent,
   SingletonAction,
   WillAppearEvent,
@@ -26,12 +27,17 @@ import {
 } from '../utils/runtime-timers';
 import { setConfigNeededDisplay, setErrorDisplay } from '../utils/action-display';
 import { logError } from '../utils/error-logging';
+import { isKeyActionEvent } from '../utils/key-action';
 
 type TimerPluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
   apiKey?: string;
   administrationId?: string;
 };
+
+type TimerKeyEvent =
+  | KeyDownEvent<TimerSettings>
+  | (WillAppearEvent<TimerSettings> & { action: KeyAction<TimerSettings> });
 
 @action({ UUID: 'com.johan-kuijt.moneybird-timer.time-tracker' })
 export class TimeTracker extends SingletonAction<TimerSettings> {
@@ -56,7 +62,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       const settings = ev.payload.settings;
       const instanceId = ev.action.id;
 
-      if (settings.displayTitle !== undefined && !settings.isRunning) {
+      if (isKeyActionEvent(ev) && settings.displayTitle !== undefined && !settings.isRunning) {
         const title = settings.displayTitle || 'Start';
         await ev.action.setTitle(String(title));
       }
@@ -187,6 +193,11 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   }
 
   override async onWillAppear(ev: WillAppearEvent<TimerSettings>): Promise<void> {
+    if (!isKeyActionEvent(ev)) {
+      streamDeck.logger.warn(`Ignoring non-key action for instance ${ev.action.id}`);
+      return;
+    }
+
     const settings = ev.payload.settings;
     const instanceId = ev.action.id;
 
@@ -305,9 +316,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     }
   }
 
-  private startUpdateInterval(
-    ev: WillAppearEvent<TimerSettings> | KeyDownEvent<TimerSettings>
-  ): void {
+  private startUpdateInterval(ev: TimerKeyEvent): void {
     const instanceId = ev.action.id;
     const settings = ev.payload.settings;
 
@@ -328,9 +337,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     streamDeck.logger.debug(`Interval started for instance ${instanceId}`);
   }
 
-  private async updateTimerDisplay(
-    ev: WillAppearEvent<TimerSettings> | KeyDownEvent<TimerSettings>
-  ): Promise<void> {
+  private async updateTimerDisplay(ev: TimerKeyEvent): Promise<void> {
     const settings = ev.payload.settings;
 
     // streamDeck.logger.debug(
@@ -385,11 +392,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     }
   }
 
-  private setupAutoStop(
-    instanceId: string,
-    hours: number,
-    ev: WillAppearEvent<TimerSettings> | KeyDownEvent<TimerSettings>
-  ): void {
+  private setupAutoStop(instanceId: string, hours: number, ev: TimerKeyEvent): void {
     // Clear any existing timeout
     clearTimeoutForKey(this.autoStopTimeouts, instanceId);
     clearTimeoutForKey(this.autoStopResetTimeouts, instanceId);

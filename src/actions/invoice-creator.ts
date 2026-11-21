@@ -24,6 +24,7 @@ import {
 import { clearTimeoutForKey, setTimeoutForKey } from '../utils/runtime-timers';
 import { setConfigNeededDisplay, setErrorDisplay } from '../utils/action-display';
 import { logError } from '../utils/error-logging';
+import { isKeyActionEvent } from '../utils/key-action';
 
 type InvoicePluginPayload = {
   event?: 'setGlobalSettings' | 'administrationSelected';
@@ -78,9 +79,10 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       streamDeck.logger.debug(`[InvoiceCreator] Settings received for instance ${instanceId}`);
 
       if (
-        settings.displayTitle !== undefined ||
-        settings.periodType !== undefined ||
-        settings.periodRange !== undefined
+        isKeyActionEvent(ev) &&
+        (settings.displayTitle !== undefined ||
+          settings.periodType !== undefined ||
+          settings.periodRange !== undefined)
       ) {
         // Update title with period info if configured
         if (settings.apiKey && settings.administrationId && settings.contactId) {
@@ -134,6 +136,11 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
   }
 
   override async onWillAppear(ev: WillAppearEvent<InvoiceSettings>): Promise<void> {
+    if (!isKeyActionEvent(ev)) {
+      streamDeck.logger.warn(`Ignoring non-key action for instance ${ev.action.id}`);
+      return;
+    }
+
     const settings = ev.payload.settings;
     const instanceId = ev.action.id;
 
