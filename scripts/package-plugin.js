@@ -4,11 +4,26 @@ import { execSync } from 'child_process';
 import { createReadStream, createWriteStream, promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import archiver from 'archiver';
+import { ZipArchive } from 'archiver';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
+
+const EXCLUDED_DIRECTORIES = ['logs', 'node_modules', '.git'];
+const EXCLUDED_FILES = ['.DS_Store'];
+const EXCLUDED_EXTENSIONS = ['.log', '.map'];
+
+function isExcludedFromPackage(relativePath) {
+  const segments = relativePath.split(/[\\/]/);
+  const fileName = segments[segments.length - 1];
+
+  return (
+    segments.some(segment => EXCLUDED_DIRECTORIES.includes(segment)) ||
+    EXCLUDED_FILES.includes(fileName) ||
+    EXCLUDED_EXTENSIONS.includes(path.extname(fileName))
+  );
+}
 
 async function packagePlugin() {
   try {
@@ -64,7 +79,7 @@ async function packagePlugin() {
     }
 
     const output = createWriteStream(outputPath);
-    const archive = archiver('zip', {
+    const archive = new ZipArchive({
       zlib: { level: 9 } // Maximum compression
     });
 
@@ -89,40 +104,11 @@ async function packagePlugin() {
 
     archive.pipe(output);
 
-    // Add all files from the plugin directory
-    archive.directory(pluginPath, 'com.johan-kuijt.moneybird-timer.sdPlugin', {
-      // Exclude certain files/directories
-      filter: (entry) => {
-        const relativePath = path.relative(pluginPath, entry.name);
-        
-        // Exclude these files/directories
-        const excludes = [
-          '.DS_Store',
-          'logs/',
-          '*.log',
-          'node_modules/',
-          '.git/',
-          '*.map'
-        ];
-        
-        for (const exclude of excludes) {
-          if (exclude.endsWith('/')) {
-            if (relativePath.startsWith(exclude) || relativePath.includes('/' + exclude)) {
-              return false;
-            }
-          } else if (exclude.includes('*')) {
-            const pattern = new RegExp(exclude.replace(/\*/g, '.*'));
-            if (pattern.test(relativePath)) {
-              return false;
-            }
-          } else if (relativePath === exclude || relativePath.includes('/' + exclude)) {
-            return false;
-          }
-        }
-        
-        return true;
-      }
-    });
+    // Add all files from the plugin directory. archiver only skips entries when the
+    // third argument is a function that returns false; entry.name is relative to pluginPath.
+    archive.directory(pluginPath, 'com.johan-kuijt.moneybird-timer.sdPlugin', entry =>
+      isExcludedFromPackage(entry.name) ? false : entry
+    );
 
     await archive.finalize();
 
