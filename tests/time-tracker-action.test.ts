@@ -521,3 +521,68 @@ test('picking the timer administration again while it runs changes nothing', asy
   assert.equal(fake.savedSettings.length, before);
   assert.deepEqual(notices, []);
 });
+
+/** Simulates the property inspector saving fields while a Moneybird request is in flight. */
+const saveMeanwhile = (fake: ReturnType<typeof createFakeAction>) =>
+  fake.action.setSettings({
+    ...fake.current(),
+    description: 'typed meanwhile',
+    projects: { p9: { id: 'p9', name: 'Loaded meanwhile' } },
+  });
+
+test('fields saved while the start request is in flight are kept', async () => {
+  const { fake, service, keyDown } = setup({ ...configured });
+  service.state.startTimer = async () => {
+    await saveMeanwhile(fake);
+    return { id: 'entry-1' } as MoneybirdTimeEntry;
+  };
+
+  await keyDown();
+
+  assert.equal(fake.current().isRunning, true);
+  assert.equal(fake.current().timeEntryId, 'entry-1');
+  assert.equal(fake.current().timerAdministrationId, '1');
+  assert.equal(fake.current().description, 'typed meanwhile');
+  assert.deepEqual(Object.keys(fake.current().projects ?? {}), ['p9']);
+});
+
+test('fields saved while the stop request is in flight are kept', async () => {
+  const start = new Date(Date.now() - 60_000);
+  const { fake, service, keyDown } = setup(runningSince(start, { timerAdministrationId: '1' }));
+  service.state.stopTimer = async () => {
+    await saveMeanwhile(fake);
+    return { id: 'entry-1' } as MoneybirdTimeEntry;
+  };
+
+  await keyDown();
+
+  assert.equal(fake.current().isRunning, false);
+  assert.equal('timeEntryId' in fake.current(), false);
+  assert.equal('startTime' in fake.current(), false);
+  assert.equal('timerAdministrationId' in fake.current(), false);
+  assert.equal(fake.current().description, 'typed meanwhile');
+  assert.deepEqual(Object.keys(fake.current().projects ?? {}), ['p9']);
+});
+
+test('fields saved while an auto-stop request is in flight are kept', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const start = new Date(Date.now() - 5 * HOUR_MS);
+  const { fake, service, tracker } = setup(
+    runningSince(start, { autoStopEnabled: true, autoStopHours: 4 })
+  );
+  service.state.stopTimer = async () => {
+    await saveMeanwhile(fake);
+    return { id: 'entry-1' } as MoneybirdTimeEntry;
+  };
+
+  await tracker.onWillAppear({
+    action: fake.action,
+    payload: { settings: fake.current() },
+  } as unknown as WillAppearEvent<TimerSettings>);
+  mock.timers.tick(1_000);
+  await flushPromises();
+
+  assert.equal(service.stopCalls.length, 1);
+  assert.equal(fake.current().isRunning, false);
+  assert.equal(fake.current().description, 'typed meanwhile');
+});

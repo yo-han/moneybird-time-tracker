@@ -41,7 +41,12 @@ import {
   type DependentList,
 } from '../utils/api-key-settings.js';
 import { migrateKeyCredentials, resolveApiKeyFromStore } from '../utils/credentials.js';
-import { runInOrder, writePatch, type SettingsAction } from '../utils/settings-writes.js';
+import {
+  runInOrder,
+  writePatch,
+  type SettingsAction,
+  type SettingsPatch,
+} from '../utils/settings-writes.js';
 import { timerAdministrationOf } from '../utils/running-timer.js';
 import type { GlobalSettingsStore } from '../utils/global-settings.js';
 import { notifyPropertyInspector, pluginGlobalSettings } from '../utils/plugin-global-settings.js';
@@ -89,15 +94,14 @@ const TIMER_LISTS: DependentList[] = [
   },
 ];
 
-function clearedTimerState(settings: TimerSettings): TimerSettings {
-  return {
-    ...settings,
-    isRunning: false,
-    startTime: undefined,
-    timeEntryId: undefined,
-    timerAdministrationId: undefined,
-  };
-}
+/**
+ * Ends the timer state of a key. Only these fields are written, onto the settings as they
+ * are at that moment: anything saved while the stop request was in flight is kept.
+ */
+const IDLE_TIMER_PATCH: SettingsPatch = {
+  values: { isRunning: false },
+  remove: ['startTime', 'timeEntryId', 'timerAdministrationId'],
+};
 
 const ADMINISTRATION_LOCKED_MESSAGE = 'Stop the running timer first to change the administration';
 
@@ -350,16 +354,17 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       const startedAt = new Date();
       const timeEntry = await moneybirdService.startTimer(settings, startedAt);
 
-      const runningSettings: TimerSettings = {
-        ...settings,
+      const timerState = {
         isRunning: true,
         startTime: startedAt.toISOString(),
         timeEntryId: timeEntry.id,
         timerAdministrationId: settings.administrationId,
       };
 
-      await action.setSettings(runningSettings);
-      await this.showRunning(action, runningSettings);
+      // Only the timer fields are written, onto the settings as they are now: anything
+      // saved while the start request was in flight is kept.
+      await writePatch(action, { values: timerState });
+      await this.showRunning(action, { ...settings, ...timerState });
       streamDeck.logger.debug(`Timer started for instance ${instanceId}`);
     } catch (error: unknown) {
       // Nothing was stored yet, so the key simply stays idle.
@@ -409,7 +414,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
   private async resetToIdle(action: TimerKeyAction, settings: TimerSettings): Promise<void> {
     this.clearInstanceRuntime(action.id);
-    await action.setSettings(clearedTimerState(settings));
+    await writePatch(action, IDLE_TIMER_PATCH);
     await this.showIdle(action, settings);
   }
 
