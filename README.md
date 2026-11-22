@@ -70,7 +70,8 @@ The administration you pick last is preselected for the next key you add. Each k
 choose another administration.
 
 For a key that should use another Moneybird account, tick `Use a different API key for this
-key` and enter that token. Untick it to go back to the shared token.
+key` and enter that token. Like the shared token, it is checked with Moneybird before it is
+saved. Untick it to go back to the shared token.
 
 Keys configured before this version keep working: the first token found becomes the shared
 token, and keys with the same token switch to it. Keys with a different token keep it as their
