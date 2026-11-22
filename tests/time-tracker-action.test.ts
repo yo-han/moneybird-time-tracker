@@ -1133,3 +1133,73 @@ test(
     assert.equal(fake.current().timeEntryId, 'entry-1');
   }
 );
+
+// ---- A start request that gets no answer (#208) ----
+
+const noResponse = () =>
+  new MoneybirdApiError('No response received from Moneybird API.', undefined, true);
+
+test('a start without an answer takes the entry Moneybird created anyway', async () => {
+  const { fake, service, keyDown } = setup({ ...configured });
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  // Moneybird created the entry at the press (rounded down to the minute) before the line dropped.
+  const pressedAt = new Date();
+  const minute = new Date(Math.floor(pressedAt.getTime() / 60_000) * 60_000);
+  service.state.recentEntries = [
+    remoteEntry({ id: 'created-1', started_at: minute.toISOString() }),
+  ];
+
+  await keyDown();
+
+  assert.equal(service.state.startCount, 1);
+  assert.equal(service.lookups.length, 1);
+  assert.equal(fake.current().isRunning, true);
+  assert.equal(fake.current().timeEntryId, 'created-1');
+  assert.ok(!fake.titles.includes('Error'));
+});
+
+test('a start without an answer and no entry found reports the failure and does not retry', async () => {
+  const { fake, service, keyDown } = setup({ ...configured });
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  service.state.recentEntries = [
+    // Same project, but started an hour earlier: another entry, not this press.
+    remoteEntry({ started_at: new Date(Date.now() - HOUR_MS).toISOString() }),
+  ];
+
+  await keyDown();
+
+  assert.equal(service.state.startCount, 1);
+  assert.equal(fake.current().isRunning, undefined);
+  assert.equal(fake.titles.at(-1), 'Error');
+});
+
+test('a start without an answer whose check also fails reports the failure', async () => {
+  const { fake, service, keyDown } = setup({ ...configured });
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  service.state.lookupError = new MoneybirdApiError('No response', undefined, true);
+
+  await keyDown();
+
+  assert.equal(service.state.startCount, 1);
+  assert.equal(fake.current().isRunning, undefined);
+  assert.equal(fake.titles.at(-1), 'Error');
+});
+
+test('a start that Moneybird rejected is not looked up', async () => {
+  const { fake, service, keyDown } = setup({ ...configured });
+  service.state.startTimer = async () => {
+    throw new MoneybirdApiError('Request rejected by Moneybird (422)', 422);
+  };
+  service.state.recentEntries = [remoteEntry()];
+
+  await keyDown();
+
+  assert.equal(service.lookups.length, 0);
+  assert.equal(fake.current().isRunning, undefined);
+});

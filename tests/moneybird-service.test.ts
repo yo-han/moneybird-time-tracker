@@ -6,6 +6,7 @@ import {
   MONEYBIRD_MAX_PAGES,
   MONEYBIRD_PAGE_SIZE,
   MONEYBIRD_REQUEST_TIMEOUT_MS,
+  MONEYBIRD_START_TIMEOUT_MS,
   MoneybirdService,
 } from '../src/services/moneybird.js';
 import { MoneybirdApiError } from '../src/services/moneybird/error-handler.js';
@@ -400,7 +401,7 @@ test('createInvoiceFromTimeEntries returns no unlinked ids when every link succe
   assert.deepEqual(result.unlinkedEntryIds, []);
 });
 
-test('creating requests carry no timeout, reads and updates do', async () => {
+test('the invoice POST carries no timeout, the start POST a long one, reads and updates the normal one', async () => {
   const http = createHttpClient();
   http.responses.post = { id: 'new' };
   http.responses.get = [billableEntry('1')];
@@ -418,7 +419,10 @@ test('creating requests carry no timeout, reads and updates do', async () => {
 
   for (const call of http.calls) {
     const timeout = (call.config as { timeout?: number }).timeout;
-    if (call.method === 'post') {
+    if (call.method === 'post' && call.url.endsWith('/time_entries.json')) {
+      // A start that never answers would block the key; see the recovery in the time tracker.
+      assert.equal(timeout, MONEYBIRD_START_TIMEOUT_MS, `${call.method} ${call.url}`);
+    } else if (call.method === 'post') {
       assert.equal(timeout, undefined, `${call.method} ${call.url}`);
     } else {
       assert.equal(timeout, MONEYBIRD_REQUEST_TIMEOUT_MS, `${call.method} ${call.url}`);
@@ -604,4 +608,24 @@ test('getTimeEntry fetches one entry with a timeout', async () => {
     (http.calls[0]?.config as { timeout?: number }).timeout,
     MONEYBIRD_REQUEST_TIMEOUT_MS
   );
+});
+
+test('a request without a response is marked as such, a rejected one is not', async () => {
+  const http = createHttpClient();
+  const service = createService(http);
+  const settings = { apiKey: 'k', administrationId: 'admin-1', projectId: 'p', userId: 'u' };
+
+  http.failures.post = {
+    request: {},
+    code: 'ECONNABORTED',
+    message: 'timeout of 60000ms exceeded',
+  };
+  const noResponse = await service.startTimer(settings).catch(error => error);
+  assert.ok(noResponse instanceof MoneybirdApiError);
+  assert.equal(noResponse.noResponse, true);
+
+  http.failures.post = { response: { status: 422, data: { error: 'invalid' } } };
+  const rejected = await service.startTimer(settings).catch(error => error);
+  assert.equal(rejected.noResponse, false);
+  assert.equal(rejected.status, 422);
 });

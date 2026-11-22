@@ -7,9 +7,14 @@ import type { MoneybirdLogger } from './types.js';
  * `undefined` when no response was received or the request could not be set up.
  */
 export class MoneybirdApiError extends Error {
+  /**
+   * @param noResponse true when the request went out but no answer came back (a timeout or
+   *   a dropped connection): Moneybird may or may not have handled it.
+   */
   constructor(
     message: string,
-    readonly status?: number
+    readonly status?: number,
+    readonly noResponse: boolean = false
   ) {
     super(message);
     this.name = 'MoneybirdApiError';
@@ -18,6 +23,11 @@ export class MoneybirdApiError extends Error {
 
 export function isMoneybirdNotFound(error: unknown): boolean {
   return error instanceof MoneybirdApiError && error.status === 404;
+}
+
+/** The request went out but no answer came back, so its outcome is unknown. */
+export function isNoResponseError(error: unknown): boolean {
+  return error instanceof MoneybirdApiError && error.noResponse;
 }
 
 export function isMoneybirdRateLimited(error: unknown): boolean {
@@ -104,7 +114,9 @@ export function toMoneybirdApiError(logger: MoneybirdLogger, error: unknown): Mo
   if (axiosError.request) {
     logger.error('No response from Moneybird API');
     return new MoneybirdApiError(
-      'No response received from Moneybird API. Check your internet connection.'
+      'No response received from Moneybird API. Check your internet connection.',
+      undefined,
+      true
     );
   }
 

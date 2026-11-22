@@ -48,6 +48,13 @@ export const MONEYBIRD_MAX_PAGES = 50;
  * invites a duplicate on the next press.
  */
 export const MONEYBIRD_REQUEST_TIMEOUT_MS = 15_000;
+/**
+ * Timeout for starting a timer. Long, because a timed out start may still have created the
+ * entry; but finite, because a start that never answers keeps the key and its property
+ * inspector waiting. After a timeout the time tracker looks for the entry instead of
+ * retrying (#208).
+ */
+export const MONEYBIRD_START_TIMEOUT_MS = 60_000;
 /** Concurrent PATCH requests when linking time entries to a new invoice. */
 export const MONEYBIRD_LINK_CONCURRENCY = 4;
 /** Attempts per link request when Moneybird answers 429. */
@@ -224,11 +231,10 @@ export class MoneybirdService {
 
       this.logger.debug('Starting timer', { url, data: payload });
 
-      const response = await this.httpClient.post<MoneybirdTimeEntry>(
-        url,
-        payload,
-        this.createRequestConfig()
-      );
+      const response = await this.httpClient.post<MoneybirdTimeEntry>(url, payload, {
+        ...this.createRequestConfig(),
+        timeout: MONEYBIRD_START_TIMEOUT_MS,
+      });
 
       if (!response.data?.id) {
         throw new MoneybirdApiError('Moneybird did not return an id for the new time entry');

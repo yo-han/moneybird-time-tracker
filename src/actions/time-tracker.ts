@@ -9,7 +9,7 @@ import streamDeck, {
   DidReceiveSettingsEvent,
 } from '@elgato/streamdeck';
 import { MoneybirdService } from '../services/moneybird.js';
-import { isPermanentRequestError } from '../services/moneybird/error-handler.js';
+import { isNoResponseError, isPermanentRequestError } from '../services/moneybird/error-handler.js';
 import {
   TimerSettings,
   projectToJson,
@@ -74,6 +74,7 @@ function createMoneybirdService(apiKey: string, administrationId?: string): Time
 }
 
 const MS_PER_HOUR = 60 * 60 * 1000;
+const MS_PER_MINUTE = 60 * 1000;
 const DISPLAY_REFRESH_MS = 1000;
 const ERROR_DISPLAY_MS = 2000;
 const AUTO_STOP_NOTICE_MS = 3000;
@@ -599,9 +600,28 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   ): Promise<void> {
     const instanceId = action.id;
 
+    let timeEntry: MoneybirdTimeEntry | undefined;
     try {
-      const timeEntry = await moneybirdService.startTimer(settings, startedAt);
+      timeEntry = await moneybirdService.startTimer(settings, startedAt);
+    } catch (error: unknown) {
+      logError(streamDeck.logger, 'Error starting timer', error, { instanceId });
+      // No answer (a timeout or a dropped connection): Moneybird may have created the entry
+      // anyway. Look for it instead of retrying, which could create a second one (#208).
+      timeEntry = isNoResponseError(error)
+        ? await this.findUnansweredStart(moneybirdService, settings, startedAt)
+        : undefined;
+      if (!timeEntry) {
+        // Nothing was stored, so the key simply stays idle. If Moneybird did create the
+        // entry after all, the next sync with Moneybird picks it up.
+        await this.flashError(action, () => this.showIdle(action, settings));
+        return;
+      }
+      streamDeck.logger.info(
+        `Start for ${instanceId} got no answer; found entry ${timeEntry.id} in Moneybird`
+      );
+    }
 
+    try {
       const timerState = {
         isRunning: true,
         startTime: startedAt.toISOString(),
@@ -615,9 +635,39 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       await this.showRunning(action, { ...settings, ...timerState });
       streamDeck.logger.debug(`Timer started for instance ${instanceId}`);
     } catch (error: unknown) {
-      // Nothing was stored yet, so the key simply stays idle.
-      logError(streamDeck.logger, 'Error starting timer', error, { instanceId });
+      logError(streamDeck.logger, 'Error saving the started timer', error, {
+        instanceId,
+        timeEntryId: timeEntry.id,
+      });
       await this.flashError(action, () => this.showIdle(action, settings));
+    }
+  }
+
+  /**
+   * After a start without an answer: the running entry for this key's user and project that
+   * started at the press (Moneybird stores whole minutes), if Moneybird created one.
+   */
+  private async findUnansweredStart(
+    moneybirdService: TimerService,
+    settings: TimerSettings,
+    startedAt: Date
+  ): Promise<MoneybirdTimeEntry | undefined> {
+    const pressMinute = Math.floor(startedAt.getTime() / MS_PER_MINUTE) * MS_PER_MINUTE;
+    try {
+      const entries = await moneybirdService.getRecentTimeEntries(
+        settings.userId,
+        startedAt,
+        new Date()
+      );
+      return entries.find(
+        entry =>
+          entry.ended_at === null &&
+          entry.project_id === settings.projectId &&
+          Math.abs(new Date(entry.started_at).getTime() - pressMinute) <= MS_PER_MINUTE
+      );
+    } catch (error) {
+      logError(streamDeck.logger, 'Could not check whether the start was created', error);
+      return undefined;
     }
   }
 
