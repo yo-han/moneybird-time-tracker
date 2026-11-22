@@ -13,6 +13,11 @@
         .hidden {
             display: none;
         }
+        .warning {
+            color: #ffb000;
+            font-size: 12px;
+            margin-top: 4px;
+        }
         .loading {
             opacity: 0.5;
             pointer-events: none;
@@ -24,8 +29,19 @@
         <sdpi-textfield id="displayTitle" setting="displayTitle" placeholder="Title of the key"></sdpi-textfield>
     </sdpi-item>
 
+    <!-- Shared by every key. No setting attribute: the plugin stores it in its global
+         settings once Moneybird accepted it, never in the settings of this key. -->
     <sdpi-item label="API Key">
-        <sdpi-textfield id="apiKey" setting="apiKey" type="password"></sdpi-textfield>
+        <sdpi-textfield id="globalApiKey" type="password" placeholder="Shared by all keys"></sdpi-textfield>
+        <div id="globalApiKeyError" class="error hidden"></div>
+    </sdpi-item>
+
+    <sdpi-item label="Own API Key">
+        <sdpi-checkbox id="apiKeyIsOverride" setting="apiKeyIsOverride" label="Use a different API key for this key"></sdpi-checkbox>
+    </sdpi-item>
+
+    <sdpi-item id="ownApiKeyItem" label="Key for this key" class="hidden">
+        <sdpi-textfield id="apiKey" setting="apiKey" type="password" placeholder="For another Moneybird account"></sdpi-textfield>
         <div id="apiKeyError" class="error hidden"></div>
     </sdpi-item>
 
@@ -74,6 +90,8 @@
         let isConnected = false;
         let currentSettings = {};
         let isLoading = false;
+        let administrationsRequested = false;
+        let ownApiKeyEnabled = false;
 
         function setLoading(loading) {
             isLoading = loading;
@@ -222,20 +240,57 @@
             }
         }
 
-        async function loadAdministrations() {
-            const apiKey = document.getElementById('apiKey')?.value;
-            if (!apiKey) return;
-
+        // scope 'global' edits the key shared by all keys, scope 'key' this key's own key.
+        // The plugin checks the key with Moneybird before it stores it, and answers with
+        // apiKeyAccepted or apiKeyRejected.
+        async function sendApiKeyChange(scope, apiKey) {
+            const fieldId = scope === 'global' ? 'globalApiKey' : 'apiKey';
             setLoading(true);
             try {
                 await streamDeckClient.send('sendToPlugin', {
-                    event: 'setGlobalSettings',
+                    event: 'apiKeyChanged',
+                    scope: scope,
                     apiKey: apiKey
                 });
             } catch (error) {
-                showError('apiKey', 'Error loading administrations');
+                showError(fieldId, 'Error loading administrations');
             } finally {
                 setLoading(false);
+            }
+        }
+
+        async function requestAdministrations() {
+            try {
+                await streamDeckClient.send('sendToPlugin', { event: 'loadAdministrations' });
+            } catch (error) {
+                showError('administrationId', 'Error loading administrations');
+            }
+        }
+
+        async function loadGlobalApiKey() {
+            try {
+                const globalSettings = await streamDeckClient.getGlobalSettings();
+                const field = document.getElementById('globalApiKey');
+                if (field) {
+                    field.value = globalSettings?.apiKey || '';
+                }
+            } catch (error) {
+                showError('globalApiKey', 'Error loading the shared API key');
+            }
+        }
+
+        function syncApiKeyFields(settings) {
+            ownApiKeyEnabled = settings.apiKeyIsOverride === true;
+            const checkbox = document.getElementById('apiKeyIsOverride');
+            // Only assign a real change: every assignment makes the component save settings.
+            if (checkbox && Boolean(checkbox.value) !== ownApiKeyEnabled) {
+                checkbox.value = ownApiKeyEnabled;
+            }
+            document.getElementById('ownApiKeyItem')?.classList.toggle('hidden', !ownApiKeyEnabled);
+
+            const warning = document.getElementById('runningKeyWarning');
+            if (warning) {
+                warning.classList.toggle('hidden', settings.isRunning !== true);
             }
         }
 
@@ -291,18 +346,45 @@
                     element.addEventListener('change', saveSettings);
                 });
 
-                // API Key input - load administrations
-                const apiKeyElement = document.getElementById('apiKey');
-                if (apiKeyElement) {
+                // API key inputs - check the key with Moneybird and load administrations
+                const watchApiKey = (elementId, scope) => {
+                    const element = document.getElementById(elementId);
+                    if (!element) return;
                     let apiKeyTimeout;
-                    apiKeyElement.addEventListener('input', (e) => {
+                    element.addEventListener('input', (e) => {
                         clearTimeout(apiKeyTimeout);
+                        hideError(elementId);
                         apiKeyTimeout = setTimeout(() => {
-                            if (e.target.value?.trim()) {
-                                loadAdministrations();
+                            const value = e.target.value?.trim() || '';
+                            // An emptied shared key is ignored; an emptied own key falls
+                            // back to the shared key.
+                            if (value || scope === 'key') {
+                                sendApiKeyChange(scope, value);
                             }
                         }, 500); // Debounce API calls
                     });
+                };
+                watchApiKey('globalApiKey', 'global');
+                watchApiKey('apiKey', 'key');
+
+                // Own API key checkbox. The value is read after the event, once the
+                // component has updated it; both events may fire for one click.
+                const overrideElement = document.getElementById('apiKeyIsOverride');
+                if (overrideElement) {
+                    const onOverrideToggle = () => setTimeout(() => {
+                        const enabled = overrideElement.value === true || overrideElement.value === 'true';
+                        if (enabled === ownApiKeyEnabled) return;
+                        ownApiKeyEnabled = enabled;
+                        document.getElementById('ownApiKeyItem')?.classList.toggle('hidden', !enabled);
+                        if (!enabled) {
+                            const ownField = document.getElementById('apiKey');
+                            if (ownField) ownField.value = '';
+                            hideError('apiKey');
+                            sendApiKeyChange('key', '');
+                        }
+                    }, 0);
+                    overrideElement.addEventListener('input', onOverrideToggle);
+                    overrideElement.addEventListener('change', onOverrideToggle);
                 }
 
                 // Administration select - load contacts
@@ -357,6 +439,17 @@
                 
                 // Update form fields
                 updateFormFields(settings);
+                syncApiKeyFields(settings);
+
+                // A new key, or one whose lists were never loaded: load them with the
+                // shared key (or this key's own key). Once per opened property inspector.
+                const hasAdministrations = settings.administrations
+                    && typeof settings.administrations === 'object'
+                    && Object.keys(settings.administrations).length > 0;
+                if (!hasAdministrations && !administrationsRequested) {
+                    administrationsRequested = true;
+                    requestAdministrations();
+                }
                 
                 // Update administrations dropdown if we have them
                 if (settings.administrations && typeof settings.administrations === 'object') {
@@ -388,6 +481,17 @@
             }
         });
 
+        // Answers from the plugin about an API key change.
+        streamDeckClient.sendToPropertyInspector.subscribe(event => {
+            const message = event?.payload || {};
+            const fieldId = message.scope === 'key' ? 'apiKey' : 'globalApiKey';
+            if (message.event === 'apiKeyRejected') {
+                showError(fieldId, message.message || 'Moneybird rejected this API key');
+            } else if (message.event === 'apiKeyAccepted') {
+                hideError(fieldId);
+            }
+        });
+
         window.connectElgatoStreamDeckSocket = async function(port, uuid, event, info, actionInfo) {
             try {
                 await streamDeckClient.connect(port, uuid, event, JSON.parse(info), JSON.parse(actionInfo));
@@ -395,6 +499,7 @@
                 isConnected = true;
                 
                 initializeEventListeners();
+                await loadGlobalApiKey();
                 
             } catch (error) {
                 console.error('Error connecting to Stream Deck:', error);
