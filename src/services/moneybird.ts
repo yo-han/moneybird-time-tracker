@@ -43,9 +43,9 @@ export const MONEYBIRD_PAGE_SIZE = 100;
 /** Upper bound on pages per listing, so a misbehaving endpoint cannot loop forever. */
 export const MONEYBIRD_MAX_PAGES = 50;
 /**
- * Timeout for reads and idempotent updates. Creating requests (POST) get none: a timed out
- * POST may still have created the time entry or invoice, and treating it as a failure
- * invites a duplicate on the next press.
+ * Timeout for reads and idempotent updates. Creating an invoice (POST) gets none: a timed out
+ * POST may still have created the invoice, and treating it as a failure invites a
+ * duplicate on the next press.
  */
 export const MONEYBIRD_REQUEST_TIMEOUT_MS = 15_000;
 /**
@@ -106,7 +106,7 @@ export class MoneybirdService {
     };
   }
 
-  /** Config for creating requests: no timeout, see MONEYBIRD_REQUEST_TIMEOUT_MS. */
+  /** Config for creating requests: no timeout (the start adds its own, see MONEYBIRD_START_TIMEOUT_MS). */
   private createRequestConfig() {
     return { headers: this.headers() };
   }

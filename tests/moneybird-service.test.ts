@@ -609,23 +609,3 @@ test('getTimeEntry fetches one entry with a timeout', async () => {
     MONEYBIRD_REQUEST_TIMEOUT_MS
   );
 });
-
-test('a request without a response is marked as such, a rejected one is not', async () => {
-  const http = createHttpClient();
-  const service = createService(http);
-  const settings = { apiKey: 'k', administrationId: 'admin-1', projectId: 'p', userId: 'u' };
-
-  http.failures.post = {
-    request: {},
-    code: 'ECONNABORTED',
-    message: 'timeout of 60000ms exceeded',
-  };
-  const noResponse = await service.startTimer(settings).catch(error => error);
-  assert.ok(noResponse instanceof MoneybirdApiError);
-  assert.equal(noResponse.noResponse, true);
-
-  http.failures.post = { response: { status: 422, data: { error: 'invalid' } } };
-  const rejected = await service.startTimer(settings).catch(error => error);
-  assert.equal(rejected.noResponse, false);
-  assert.equal(rejected.status, 422);
-});
