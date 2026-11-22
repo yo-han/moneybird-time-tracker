@@ -113,7 +113,7 @@ account.
 - If stopping fails, the timer keeps running so the next press can retry
 - Auto-stop ends the entry at the configured limit, also when the computer was asleep
 - While a timer runs, the key's administration cannot be changed; the entry is always stopped in the administration it was started in
-- A timer started elsewhere (the Moneybird web app, another computer) shows on the key with the same user and project, within about a minute, and a press stops it. If several keys match, the one with the same description gets it. Only timers started in the last 24 hours are picked up, so a forgotten old timer never ends up on a key
+- A timer started elsewhere (the Moneybird web app, another computer) shows on the key with the same user and project, within about a minute, and a press stops it. If several keys match, the one with the same description gets it. Only timers started in the last 24 hours are picked up, so a forgotten old timer never ends up on a key. Auto-stop does not apply to a picked-up timer
 - A timer stopped elsewhere puts the key back to idle, and a stop press never overwrites an end time set elsewhere
 
 `Invoice Creator`

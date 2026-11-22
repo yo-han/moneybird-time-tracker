@@ -119,8 +119,21 @@ const TIMER_LISTS: DependentList[] = [
  */
 const IDLE_TIMER_PATCH: SettingsPatch = {
   values: { isRunning: false },
-  remove: ['startTime', 'timeEntryId', 'timerAdministrationId'],
+  remove: ['startTime', 'timeEntryId', 'timerAdministrationId', 'timerPickedUp'],
 };
+
+/**
+ * The auto-stop limit that applies to the key's running timer, or null for none. A timer
+ * picked up from elsewhere is left alone: it was started outside this key, possibly hours
+ * ago, and stopping it at once at start plus the key's limit would end work that may still
+ * be going on.
+ */
+function autoStopHoursFor(settings: TimerSettings): number | null {
+  if (!settings.autoStopEnabled || settings.timerPickedUp === true) {
+    return null;
+  }
+  return normalizeAutoStopHours(settings.autoStopHours);
+}
 
 const ADMINISTRATION_LOCKED_MESSAGE = 'Stop the running timer first to change the administration';
 
@@ -535,6 +548,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         startTime: new Date(entry.started_at).toISOString(),
         timeEntryId: entry.id,
         timerAdministrationId: administrationId,
+        timerPickedUp: true,
       };
       await writePatch(action, { values: timerState });
       streamDeck.logger.info(`Key ${action.id} picked up timer ${entry.id} started elsewhere`);
@@ -637,8 +651,10 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
       // Only the timer fields are written, onto the settings as they are now: anything
       // saved while the start request was in flight is kept.
-      await writePatch(action, { values: timerState });
-      await this.showRunning(action, { ...settings, ...timerState });
+      // A started timer is the key's own: a leftover picked-up mark must not switch off
+      // its auto-stop.
+      await writePatch(action, { values: timerState, remove: ['timerPickedUp'] });
+      await this.showRunning(action, { ...settings, ...timerState, timerPickedUp: undefined });
       streamDeck.logger.debug(`Timer started for instance ${instanceId}`);
     } catch (error: unknown) {
       logError(streamDeck.logger, 'Error saving the started timer', error, {
@@ -778,9 +794,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
    * the machine slept through the auto-stop timeout; otherwise when the key was pressed.
    */
   private resolveStopTime(settings: TimerSettings, pressedAt: Date): Date {
-    const autoStopHours = settings.autoStopEnabled
-      ? normalizeAutoStopHours(settings.autoStopHours)
-      : null;
+    const autoStopHours = autoStopHoursFor(settings);
 
     if (autoStopHours === null || !settings.startTime) {
       return pressedAt;
@@ -842,9 +856,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     const elapsedSeconds = (Date.now() - new Date(settings.startTime).getTime()) / 1000;
     let title = `⏱️ ${formatElapsedTime(elapsedSeconds)}`;
 
-    const autoStopHours = settings.autoStopEnabled
-      ? normalizeAutoStopHours(settings.autoStopHours)
-      : null;
+    const autoStopHours = autoStopHoursFor(settings);
     if (autoStopHours !== null) {
       const remainingMinutes = (autoStopHours * 3600 - elapsedSeconds) / 60;
       if (remainingMinutes > 0 && remainingMinutes <= AUTO_STOP_WARNING_MINUTES) {
@@ -859,9 +871,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     const instanceId = action.id;
     clearTimeoutForKey(this.autoStopTimeouts, instanceId);
 
-    const autoStopHours = settings.autoStopEnabled
-      ? normalizeAutoStopHours(settings.autoStopHours)
-      : null;
+    const autoStopHours = autoStopHoursFor(settings);
     if (autoStopHours === null || !settings.startTime) {
       return;
     }

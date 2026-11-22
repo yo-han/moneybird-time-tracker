@@ -43,6 +43,8 @@ export interface TimerSettings extends KeyCredentials {
    * there, also when the key's administration was changed meanwhile.
    */
   timerAdministrationId?: string;
+  /** The running timer was started elsewhere and picked up; auto-stop does not apply. */
+  timerPickedUp?: boolean;
   displayTitle?: string;
   autoStopEnabled?: boolean;
   autoStopHours?: number;

@@ -970,7 +970,7 @@ test('a key with another project or user does not pick up the entry', async () =
   assert.equal(fake.current().isRunning, undefined);
 });
 
-test('auto-stop applies to a picked-up timer, counted from its own start', async () => {
+test('a picked-up timer is not auto-stopped, even past the key limit', async () => {
   mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
   const startedAt = new Date(Date.now() - 5 * HOUR_MS);
   const { fake, service, tracker } = setup({
@@ -982,12 +982,70 @@ test('auto-stop applies to a picked-up timer, counted from its own start', async
   await appear(tracker, fake);
 
   await tracker.syncWithMoneybird();
-  mock.timers.tick(1_000);
-  await flushPromises();
+  for (let i = 0; i < 5; i++) {
+    mock.timers.tick(1_000);
+    await flushPromises();
+  }
+
+  assert.equal(service.stopCalls.length, 0);
+  assert.equal(fake.current().isRunning, true);
+  assert.equal(fake.current().timerPickedUp, true);
+});
+
+test('a picked-up timer shows no auto-stop warning near the key limit', async () => {
+  // Three minutes before a 4 h limit: a timer started on the key would show the warning.
+  const startedAt = new Date(Date.now() - 4 * HOUR_MS + 3 * 60_000);
+  const { fake, service, tracker } = setup({
+    ...configured,
+    autoStopEnabled: true,
+    autoStopHours: 4,
+  });
+  service.state.recentEntries = [remoteEntry({ started_at: startedAt.toISOString() })];
+  await appear(tracker, fake);
+
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.current().isRunning, true);
+  const title = fake.titles.at(-1) ?? '';
+  assert.match(title, /⏱️/);
+  assert.ok(!title.startsWith('⚠️'), title);
+});
+
+test('starting a timer on the key removes a leftover picked-up mark', async () => {
+  const { fake, keyDown } = setup({ ...configured, timerPickedUp: true });
+
+  await keyDown();
+
+  assert.equal(fake.current().isRunning, true);
+  assert.equal('timerPickedUp' in fake.current(), false);
+});
+
+test('a picked-up timer stopped by hand ends at the press, not at the key limit', async () => {
+  const startedAt = new Date(Date.now() - 5 * HOUR_MS);
+  const { fake, service, tracker, keyDown } = setup({
+    ...configured,
+    autoStopEnabled: true,
+    autoStopHours: 4,
+  });
+  service.state.recentEntries = [remoteEntry({ started_at: startedAt.toISOString() })];
+  await appear(tracker, fake);
+  await tracker.syncWithMoneybird();
+  const before = Date.now();
+
+  await keyDown();
 
   assert.equal(service.stopCalls.length, 1);
-  assert.equal(service.stopCalls[0]?.timeEntryId, 'remote-1');
-  assert.equal(service.stopCalls[0]?.endedAt.getTime(), startedAt.getTime() + 4 * HOUR_MS);
+  assert.ok((service.stopCalls[0]?.endedAt.getTime() ?? 0) >= before);
+  assert.equal('timerPickedUp' in fake.current(), false);
+});
+
+test('a timer started on the key itself is not marked as picked up', async () => {
+  const { fake, keyDown } = setup({ ...configured, autoStopEnabled: true, autoStopHours: 4 });
+
+  await keyDown();
+
+  assert.equal(fake.current().isRunning, true);
+  assert.equal(fake.current().timerPickedUp, undefined);
 });
 
 test('keys look up Moneybird shortly after they appear and then every minute', async () => {
