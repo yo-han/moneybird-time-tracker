@@ -85,7 +85,7 @@ async function loadInvoiceAdministration(
     logger.debug('Settings saved with new data');
     return true;
   } catch (fetchError) {
-    logError(logger, 'Error fetching Moneybird data', fetchError);
+    logError(logger, 'Error loading the administration contacts', fetchError);
     return false;
   }
 }

@@ -216,7 +216,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         },
       });
     } catch (fetchError) {
-      logError(streamDeck.logger, 'Error fetching Moneybird data', fetchError, {
+      logError(streamDeck.logger, 'Error loading the administration lists', fetchError, {
         administrationId,
       });
     }
