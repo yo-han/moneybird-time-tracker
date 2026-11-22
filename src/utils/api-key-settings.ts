@@ -9,6 +9,12 @@ import {
 import type { GlobalSettingsStore } from './global-settings.js';
 import { logError } from './error-logging.js';
 import { resolveApiKey } from './credentials.js';
+import {
+  runInOrder,
+  writePatch,
+  type SettingsAction,
+  type SettingsPatch,
+} from './settings-writes.js';
 
 /**
  * Messages a property inspector sends about the API key.
@@ -36,12 +42,6 @@ export type DependentList = {
   fetch: (service: ListService) => Promise<Record<string, JsonValue>>;
 };
 
-type SettingsAction<T> = {
-  id: string;
-  getSettings(): Promise<T>;
-  setSettings(settings: T): Promise<void>;
-};
-
 type Logger = Parameters<typeof logError>[0];
 
 export type ApiKeyEventDependencies = {
@@ -53,12 +53,6 @@ export type ApiKeyEventDependencies = {
 };
 
 type Scope = 'global' | 'key';
-
-/** Settings to merge into the key's latest settings; `removeApiKey` drops its own key. */
-type SettingsPatch = {
-  values: Record<string, JsonValue>;
-  removeApiKey?: boolean;
-};
 
 /**
  * Thrown when a key change would leave this key's running timer behind an API key that
@@ -90,25 +84,6 @@ function describeFailure(error: unknown): string {
     return 'Moneybird rejected this API key';
   }
   return 'Could not load administrations';
-}
-
-/**
- * Events for one key run one after another, in the order the property inspector sent
- * them. Otherwise a slow request (paste a key) could finish after a quick one (untick)
- * and restore what the user just removed.
- */
-const queues = new Map<string, Promise<unknown>>();
-
-function runInOrder<T>(key: string, task: () => Promise<T>): Promise<T> {
-  const run = (queues.get(key) ?? Promise.resolve()).then(task);
-  const tail = run.catch(() => undefined);
-  queues.set(key, tail);
-  void tail.then(() => {
-    if (queues.get(key) === tail) {
-      queues.delete(key);
-    }
-  });
-  return run;
 }
 
 /**
@@ -165,18 +140,6 @@ async function loadLists(
     values[dependent.selection] = '';
   }
   return { values };
-}
-
-/** Applies a patch to the key's latest settings, so a write made meanwhile is kept. */
-async function writePatch<T extends KeyCredentials>(
-  action: SettingsAction<T>,
-  patch: SettingsPatch
-): Promise<void> {
-  const next: T = { ...(await action.getSettings()), ...patch.values };
-  if (patch.removeApiKey) {
-    delete next.apiKey;
-  }
-  await action.setSettings(next);
 }
 
 /**
@@ -302,7 +265,7 @@ async function removeOwnKey<T extends KeyCredentials>(
   report: (scope: Scope, error?: unknown) => Promise<false>,
   accept: (scope: Scope) => Promise<void>
 ): Promise<boolean> {
-  const removal: SettingsPatch = { values: { apiKeyIsOverride: false }, removeApiKey: true };
+  const removal: SettingsPatch = { values: { apiKeyIsOverride: false }, remove: ['apiKey'] };
 
   if (settings.isRunning === true) {
     if (!sharedKey) {
@@ -312,7 +275,7 @@ async function removeOwnKey<T extends KeyCredentials>(
       const patch = await load(sharedKey);
       await writePatch(action, {
         values: { ...patch.values, ...removal.values },
-        removeApiKey: true,
+        remove: ['apiKey'],
       });
       await accept('key');
       return true;

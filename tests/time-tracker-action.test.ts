@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
-import type { KeyDownEvent, WillAppearEvent, WillDisappearEvent } from '@elgato/streamdeck';
+import type {
+  KeyDownEvent,
+  SendToPluginEvent,
+  WillAppearEvent,
+  WillDisappearEvent,
+} from '@elgato/streamdeck';
 import { TimeTracker, type CreateTimerService } from '../src/actions/time-tracker.js';
 import { MoneybirdApiError } from '../src/services/moneybird/error-handler.js';
 import { GlobalSettingsStore } from '../src/utils/global-settings.js';
@@ -48,6 +53,8 @@ function createFakeService() {
     startTimer: () => Promise<MoneybirdTimeEntry>;
     stopTimer: () => Promise<MoneybirdTimeEntry>;
     startCount: number;
+    beforeLists?: () => Promise<void>;
+    administrationsDelayMs?: number;
   } = {
     startTimer: async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry,
     stopTimer: async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry,
@@ -57,8 +64,14 @@ function createFakeService() {
   const factory: CreateTimerService = apiKey => {
     usedApiKeys.push(apiKey);
     return {
-      getAdministrations: async () => [],
-      getProjects: async () => [],
+      getAdministrations: async () => {
+        await new Promise(resolve => setTimeout(resolve, state.administrationsDelayMs ?? 0));
+        return [];
+      },
+      getProjects: async () => {
+        await state.beforeLists?.();
+        return [];
+      },
       getUsers: async () => [],
       getContacts: async () => [],
       startTimer: async () => {
@@ -340,4 +353,45 @@ test('auto-stop stops the entry with the global key', async () => {
 
   assert.equal(service.stopCalls.length, 1);
   assert.deepEqual(service.usedApiKeys, ['global-key']);
+});
+
+test('a timer started while the administration lists load is kept', async () => {
+  const { fake, service, tracker } = setup({ ...configured });
+  // The key is pressed while Moneybird answers the projects request.
+  service.state.beforeLists = async () => {
+    await fake.action.setSettings({
+      ...fake.current(),
+      isRunning: true,
+      startTime: '2026-11-22T10:00:00.000Z',
+      timeEntryId: 'entry-7',
+    });
+  };
+
+  await tracker.onSendToPlugin({
+    action: fake.action,
+    payload: { event: 'administrationSelected', administrationId: '9' },
+  } as unknown as SendToPluginEvent<{ event: 'administrationSelected' }, TimerSettings>);
+
+  assert.equal(fake.current().administrationId, '9');
+  assert.deepEqual(fake.current().projects, {});
+  assert.equal(fake.current().isRunning, true);
+  assert.equal(fake.current().timeEntryId, 'entry-7');
+});
+
+test('an administration change sent after a slower list load is applied last', async () => {
+  const { fake, service, tracker } = setup({ ...configured });
+  // The property inspector opens (load lists, slow), then the user picks an administration.
+  service.state.administrationsDelayMs = 30;
+  const send = (payload: Record<string, string>) =>
+    tracker.onSendToPlugin({
+      action: fake.action,
+      payload,
+    } as unknown as SendToPluginEvent<{ event: 'administrationSelected' }, TimerSettings>);
+
+  await Promise.all([
+    send({ event: 'loadAdministrations' }),
+    send({ event: 'administrationSelected', administrationId: '9' }),
+  ]);
+
+  assert.equal(fake.current().administrationId, '9');
 });
