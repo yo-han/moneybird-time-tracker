@@ -17,7 +17,7 @@ import type {
 
 const HOUR_MS = 60 * 60 * 1000;
 
-type StopCall = { timeEntryId: string; endedAt: Date };
+type StopCall = { timeEntryId: string; endedAt: Date; apiKey: string };
 
 function createFakeAction(initial: TimerSettings) {
   let settings = initial;
@@ -57,6 +57,7 @@ function createFakeService() {
     beforeLists?: () => Promise<void>;
     administrationsDelayMs?: number;
     listLoads?: number;
+    administrations?: Array<{ id: string; name: string }>;
   } = {
     startTimer: async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry,
     stopTimer: async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry,
@@ -69,7 +70,7 @@ function createFakeService() {
     return {
       getAdministrations: async () => {
         await new Promise(resolve => setTimeout(resolve, state.administrationsDelayMs ?? 0));
-        return [];
+        return state.administrations ?? [];
       },
       getProjects: async () => {
         state.listLoads = (state.listLoads ?? 0) + 1;
@@ -83,7 +84,7 @@ function createFakeService() {
         return state.startTimer();
       },
       stopTimer: async (timeEntryId: string, endedAt: Date = new Date()) => {
-        stopCalls.push({ timeEntryId, endedAt });
+        stopCalls.push({ timeEntryId, endedAt, apiKey });
         return state.stopTimer();
       },
     };
@@ -628,4 +629,40 @@ test('a key press right after an own API key change waits for it', async () => {
   assert.equal(service.state.startCount, 0);
   assert.equal(fake.current().apiKey, 'other-account-key');
   assert.equal(fake.current().isRunning, undefined);
+});
+
+test('an auto-stop that fires during an API key change waits for it and stops with the new key', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const start = new Date(Date.now() - 5 * HOUR_MS);
+  const { fake, service, tracker } = setup(
+    runningSince(start, { timerAdministrationId: '1', autoStopEnabled: true, autoStopHours: 4 })
+  );
+  // The new own key can open the timer's administration, but loading takes 2 s.
+  service.state.administrations = [{ id: '1', name: 'Main' }];
+  service.state.administrationsDelayMs = 2_000;
+
+  await tracker.onWillAppear({
+    action: fake.action,
+    payload: { settings: fake.current() },
+  } as unknown as WillAppearEvent<TimerSettings>);
+  const change = tracker.onSendToPlugin({
+    action: fake.action,
+    payload: { event: 'apiKeyChanged', scope: 'key', apiKey: 'own-2' },
+  } as unknown as SendToPluginEvent<{ event: 'apiKeyChanged' }, TimerSettings>);
+  // Let the key change reach its (mocked) 2 s administrations request.
+  await flushPromises();
+
+  // Auto-stop is due after 1 s, while the key change is still loading.
+  mock.timers.tick(1_000);
+  await flushPromises();
+  assert.equal(service.stopCalls.length, 0);
+
+  mock.timers.tick(1_000);
+  await flushPromises();
+  await change;
+  await flushPromises();
+
+  assert.equal(service.stopCalls.length, 1);
+  assert.equal(service.stopCalls[0]?.apiKey, 'own-2');
+  assert.equal(fake.current().isRunning, false);
 });
