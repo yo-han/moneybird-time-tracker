@@ -309,8 +309,11 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   override async onKeyDown(ev: KeyDownEvent<TimerSettings>): Promise<void> {
     const instanceId = ev.action.id;
 
+    // runExclusivePerKey drops a double press. runInOrder puts the press in the key's queue
+    // with the property inspector's messages, so a start or stop never overlaps an API key
+    // or administration change, and both decide on the same, current settings.
     const handled = await runExclusivePerKey(this.requestsInFlight, instanceId, () =>
-      this.toggleTimer(ev.action, ev.payload.settings)
+      runInOrder(instanceId, () => this.toggleTimer(ev.action))
     );
 
     if (!handled) {
@@ -318,7 +321,9 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     }
   }
 
-  private async toggleTimer(action: TimerKeyAction, settings: TimerSettings): Promise<void> {
+  private async toggleTimer(action: TimerKeyAction): Promise<void> {
+    // Read now, not from the key press: an earlier message in the queue may have changed them.
+    const settings = await action.getSettings();
     const apiKey = await this.resolveApiKey(settings);
 
     if (settings.isRunning) {
@@ -523,7 +528,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     const timeout = setTimeout(() => {
       this.autoStopTimeouts.delete(instanceId);
       runExclusivePerKey(this.requestsInFlight, instanceId, () =>
-        this.autoStop(action, autoStopHours)
+        runInOrder(instanceId, () => this.autoStop(action, autoStopHours))
       ).catch(error =>
         logError(streamDeck.logger, 'Error during auto-stop', error, { instanceId })
       );

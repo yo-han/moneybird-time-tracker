@@ -586,3 +586,46 @@ test('fields saved while an auto-stop request is in flight are kept', async () =
   assert.equal(fake.current().isRunning, false);
   assert.equal(fake.current().description, 'typed meanwhile');
 });
+
+const slowStart = (service: ReturnType<typeof createFakeService>) => {
+  service.state.startTimer = async () => {
+    await new Promise(resolve => setTimeout(resolve, 30));
+    return { id: 'entry-1' } as MoneybirdTimeEntry;
+  };
+};
+
+test('a key press right after an administration change waits for it, so no mismatched timer starts', async () => {
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  slowStart(service);
+
+  // The property inspector sends the change, then the key is pressed.
+  const change = sendAdministration(tracker, fake.action, '9');
+  const press = keyDown();
+  await Promise.all([change, press]);
+
+  // The change cleared the project, so the key needs configuration instead of starting a
+  // timer in administration 1 while it shows 9.
+  assert.equal(service.state.startCount, 0);
+  assert.equal(fake.current().administrationId, '9');
+  assert.equal(fake.current().isRunning, undefined);
+  assert.equal(fake.titles.at(-1), 'Config needed');
+});
+
+test('a key press right after an own API key change waits for it', async () => {
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  slowStart(service);
+  service.state.administrationsDelayMs = 10;
+
+  const change = tracker.onSendToPlugin({
+    action: fake.action,
+    payload: { event: 'apiKeyChanged', scope: 'key', apiKey: 'other-account-key' },
+  } as unknown as SendToPluginEvent<{ event: 'apiKeyChanged' }, TimerSettings>);
+  const press = keyDown();
+  await Promise.all([change, press]);
+
+  // The new key cannot open administration 1 (the fake returns none), so the key was
+  // cleared before the press was handled: no timer runs behind a key that cannot stop it.
+  assert.equal(service.state.startCount, 0);
+  assert.equal(fake.current().apiKey, 'other-account-key');
+  assert.equal(fake.current().isRunning, undefined);
+});
