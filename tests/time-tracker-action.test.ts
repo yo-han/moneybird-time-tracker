@@ -1482,9 +1482,14 @@ test('a confirmed start forgets an earlier unconfirmed one', async () => {
   assert.equal(fake.current().timerPickedUp, true);
 });
 
-test('a started timer whose save failed is found later as the key own start', async () => {
-  freezeClock();
-  const { fake, service, tracker, keyDown } = setup({ ...configured });
+test("a started timer whose save failed is found later as the key's own start", async () => {
+  // Real timers for the auto-stop timeout would be slow; mock them, and Date too.
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: FROZEN_NOW });
+  const { fake, service, tracker, keyDown } = setup({
+    ...configured,
+    autoStopEnabled: true,
+    autoStopHours: 4,
+  });
   await appear(tracker, fake);
   service.state.startTimer = async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry;
   const save = fake.action.setSettings;
@@ -1494,10 +1499,18 @@ test('a started timer whose save failed is found later as the key own start', as
   await keyDown();
   fake.action.setSettings = save;
   assert.equal(fake.current().isRunning, undefined);
+  const startedAt = pressMinute();
 
-  service.state.recentEntries = [remoteEntry({ id: 'entry-1', started_at: pressMinute() })];
+  // Found five hours later, past the 4 h limit.
+  mock.timers.setTime(FROZEN_NOW + 5 * HOUR_MS);
+  service.state.recentEntries = [remoteEntry({ id: 'entry-1', started_at: startedAt })];
   await tracker.syncWithMoneybird();
 
   assert.equal(fake.current().timeEntryId, 'entry-1');
   assert.equal('timerPickedUp' in fake.current(), false);
+
+  mock.timers.tick(1_000);
+  await flushPromises();
+  assert.equal(service.stopCalls.length, 1);
+  assert.equal(service.stopCalls[0]?.timeEntryId, 'entry-1');
 });

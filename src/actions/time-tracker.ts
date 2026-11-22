@@ -698,9 +698,10 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         instanceId,
         timeEntryId: timeEntry.id,
       });
-      // The entry exists in Moneybird, but the key does not show it. Remember it like a
-      // start without an answer, so the next sync picks it up as this key's own and keeps
-      // its auto-stop.
+      // The entry exists in Moneybird. If saving it failed, the key does not hold it:
+      // remember it like a start without an answer, so the next sync picks it up as this
+      // key's own and keeps its auto-stop. (If only the display failed, the key already
+      // holds the entry and the sync leaves it alone.)
       this.rememberUnconfirmedStart(instanceId, settings, startedAt);
       await this.flashError(action, () => this.showIdle(action, settings));
     }
