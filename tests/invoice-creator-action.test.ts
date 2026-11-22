@@ -162,13 +162,15 @@ test('a key without an API key of its own creates the invoice with the global ke
   assert.deepEqual(usedApiKeys, ['global-key']);
   assert.equal(state.createCount, 1);
   assert.ok(titles.includes('✓ Created'));
+  assert.ok(!titles.includes('Config needed'));
 });
 
 test('a key without any API key does not create an invoice', async () => {
-  const { shortPress, usedApiKeys, state } = setup({ ...defaultSettings, apiKey: '' });
+  const { shortPress, usedApiKeys, state, titles } = setup({ ...defaultSettings, apiKey: '' });
 
   await shortPress();
 
   assert.deepEqual(usedApiKeys, []);
   assert.equal(state.createCount, 0);
+  assert.ok(titles.includes('Config needed'));
 });
