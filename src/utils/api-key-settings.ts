@@ -9,6 +9,7 @@ import {
 import type { GlobalSettingsStore } from './global-settings.js';
 import { logError } from './error-logging.js';
 import { resolveApiKey } from './credentials.js';
+import { timerAdministrationOf } from './running-timer.js';
 import {
   runInOrder,
   writePatch,
@@ -111,6 +112,13 @@ async function loadLists(
 
   const values: Record<string, JsonValue> = { administrations };
 
+  // The key that stops a running timer must be able to open the administration its entry
+  // lives in, which can differ from the one the key shows.
+  const timerAdministrationId = isRunning ? timerAdministrationOf(settings) : '';
+  if (timerAdministrationId && !(timerAdministrationId in administrations)) {
+    throw new RunningTimerUnreachableError(timerAdministrationId);
+  }
+
   if (administrationId && administrationId in administrations) {
     const service = createService(apiKey, administrationId);
     const lists = await Promise.all(dependents.map(dependent => dependent.fetch(service)));
@@ -128,10 +136,6 @@ async function loadLists(
       }
     });
     return { values };
-  }
-
-  if (isRunning && settings.administrationId) {
-    throw new RunningTimerUnreachableError(settings.administrationId);
   }
 
   values.administrationId = '';
@@ -269,7 +273,7 @@ async function removeOwnKey<T extends KeyCredentials>(
 
   if (settings.isRunning === true) {
     if (!sharedKey) {
-      return report('key', new RunningTimerUnreachableError(settings.administrationId));
+      return report('key', new RunningTimerUnreachableError(timerAdministrationOf(settings)));
     }
     try {
       const patch = await load(sharedKey);

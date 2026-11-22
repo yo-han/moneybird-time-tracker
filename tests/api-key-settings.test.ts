@@ -507,3 +507,27 @@ test('an emptied global key field changes nothing', async () => {
   assert.deepEqual(notices, []);
   assert.equal(moneybird.calls.length, 0);
 });
+
+test('a running timer refuses a key that cannot open the administration of its entry', async () => {
+  const global = createStore({ apiKey: 'key-other-account' });
+  // The key shows administration 200, but its running entry lives in 300.
+  const action = createAction(
+    runningOn({ administrationId: '200', timerAdministrationId: '300', projectId: 'p9' })
+  );
+  const moneybird = createFakeMoneybird();
+
+  const { result, notices } = run(
+    action,
+    { event: 'apiKeyChanged', scope: 'global', apiKey: 'key-a' },
+    global.store,
+    moneybird
+  );
+
+  assert.equal(await result, false);
+  assert.equal(global.stored().apiKey, 'key-other-account');
+  assert.equal(action.saved.length, 0);
+  assert.match(
+    String((notices[0] as Record<string, JsonValue>).message),
+    /Stop the running timer first.*\(300\)/
+  );
+});

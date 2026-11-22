@@ -10,7 +10,13 @@ import streamDeck, {
 } from '@elgato/streamdeck';
 import { MoneybirdService } from '../services/moneybird.js';
 import { isPermanentRequestError } from '../services/moneybird/error-handler.js';
-import { TimerSettings, projectToJson, userToJson, contactToJson } from '../types/moneybird.js';
+import {
+  TimerSettings,
+  projectToJson,
+  userToJson,
+  contactToJson,
+  type JsonValue,
+} from '../types/moneybird.js';
 import path from 'path';
 import {
   calculateRemainingAutoStopHours,
@@ -35,7 +41,8 @@ import {
   type DependentList,
 } from '../utils/api-key-settings.js';
 import { migrateKeyCredentials, resolveApiKeyFromStore } from '../utils/credentials.js';
-import { runInOrder, writePatch } from '../utils/settings-writes.js';
+import { runInOrder, writePatch, type SettingsAction } from '../utils/settings-writes.js';
+import { timerAdministrationOf } from '../utils/running-timer.js';
 import type { GlobalSettingsStore } from '../utils/global-settings.js';
 import { notifyPropertyInspector, pluginGlobalSettings } from '../utils/plugin-global-settings.js';
 
@@ -88,8 +95,11 @@ function clearedTimerState(settings: TimerSettings): TimerSettings {
     isRunning: false,
     startTime: undefined,
     timeEntryId: undefined,
+    timerAdministrationId: undefined,
   };
 }
+
+const ADMINISTRATION_LOCKED_MESSAGE = 'Stop the running timer first to change the administration';
 
 @action({ UUID: 'com.johan-kuijt.moneybird-timer.time-tracker' })
 export class TimeTracker extends SingletonAction<TimerSettings> {
@@ -100,7 +110,8 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
   constructor(
     private readonly createService: CreateTimerService = createMoneybirdService,
-    private readonly globalSettings: GlobalSettingsStore = pluginGlobalSettings
+    private readonly globalSettings: GlobalSettingsStore = pluginGlobalSettings,
+    private readonly notify: (message: JsonValue) => Promise<void> = notifyPropertyInspector
   ) {
     super();
   }
@@ -151,7 +162,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
           store: this.globalSettings,
           logger: streamDeck.logger,
           dependents: TIMER_LISTS,
-          notify: notifyPropertyInspector,
+          notify: this.notify,
           createService: this.createService,
         });
       } else if (event === 'administrationSelected') {
@@ -182,6 +193,11 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
     if (!apiKey || !administrationId) {
       streamDeck.logger.debug('Missing apiKey or administrationId, aborting');
+      return;
+    }
+
+    if (currentSettings.isRunning) {
+      await this.refuseAdministrationChange(ev.action, currentSettings, administrationId);
       return;
     }
 
@@ -220,6 +236,37 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         administrationId,
       });
     }
+  }
+
+  /**
+   * A running timer keeps its administration: its entry lives there, and the selections
+   * belong to it. The property inspector may already have saved the new administration,
+   * so it is put back, and the property inspector is told why.
+   */
+  private async refuseAdministrationChange(
+    action: SettingsAction<TimerSettings>,
+    settings: TimerSettings,
+    requestedAdministrationId: string
+  ): Promise<void> {
+    const timerAdministrationId = timerAdministrationOf(settings);
+    if (
+      requestedAdministrationId === timerAdministrationId &&
+      settings.administrationId === timerAdministrationId
+    ) {
+      return;
+    }
+
+    streamDeck.logger.warn(
+      `Refusing administration change for ${action.id}: a timer is running in administration ${timerAdministrationId}`
+    );
+    if (settings.administrationId !== timerAdministrationId) {
+      await writePatch(action, { values: { administrationId: timerAdministrationId } });
+    }
+    await this.notify({
+      event: 'administrationRejected',
+      actionId: action.id,
+      message: ADMINISTRATION_LOCKED_MESSAGE,
+    });
   }
 
   override async onWillAppear(ev: WillAppearEvent<TimerSettings>): Promise<void> {
@@ -261,19 +308,27 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
   private async toggleTimer(action: TimerKeyAction, settings: TimerSettings): Promise<void> {
     const apiKey = await this.resolveApiKey(settings);
+
+    if (settings.isRunning) {
+      // Stopping needs only the entry and its administration, not a project or user: a
+      // running timer must stay stoppable whatever happened to the key's selections.
+      const timerAdministrationId = timerAdministrationOf(settings);
+      if (!apiKey || !timerAdministrationId) {
+        streamDeck.logger.debug('Missing API key or administration for the running timer');
+        await setConfigNeededDisplay(action, this.getImagePath('default'));
+        return;
+      }
+      await this.stopTimer(action, settings, this.createService(apiKey, timerAdministrationId));
+      return;
+    }
+
     if (!apiKey || !settings.administrationId || !settings.projectId || !settings.userId) {
       streamDeck.logger.debug('Missing required settings');
       await setConfigNeededDisplay(action, this.getImagePath('default'));
       return;
     }
 
-    const moneybirdService = this.createService(apiKey, settings.administrationId);
-
-    if (settings.isRunning) {
-      await this.stopTimer(action, settings, moneybirdService);
-    } else {
-      await this.startTimer(action, settings, moneybirdService);
-    }
+    await this.startTimer(action, settings, this.createService(apiKey, settings.administrationId));
   }
 
   private async startTimer(
@@ -292,6 +347,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         isRunning: true,
         startTime: startedAt.toISOString(),
         timeEntryId: timeEntry.id,
+        timerAdministrationId: settings.administrationId,
       };
 
       await action.setSettings(runningSettings);
@@ -477,7 +533,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       if (!apiKey) {
         throw new Error('No Moneybird API key configured');
       }
-      const moneybirdService = this.createService(apiKey, settings.administrationId);
+      const moneybirdService = this.createService(apiKey, timerAdministrationOf(settings));
       await moneybirdService.stopTimer(settings.timeEntryId, endedAt);
     } catch (error) {
       logError(streamDeck.logger, 'Error during auto-stop', error, {

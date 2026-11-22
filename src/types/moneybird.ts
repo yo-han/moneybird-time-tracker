@@ -38,6 +38,11 @@ export interface TimerSettings extends KeyCredentials {
   isRunning?: boolean;
   startTime?: string;
   timeEntryId?: string;
+  /**
+   * Administration of the running entry, pinned when the timer starts. Stopping always goes
+   * there, also when the key's administration was changed meanwhile.
+   */
+  timerAdministrationId?: string;
   displayTitle?: string;
   autoStopEnabled?: boolean;
   autoStopHours?: number;
