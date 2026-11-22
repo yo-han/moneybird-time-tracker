@@ -7,7 +7,7 @@ export type JsonObject = { [key: string]: JsonValue | undefined };
  * Plugin wide settings, shared by every key.
  * - `apiKey`: the Moneybird API key that keys use unless they have their own.
  * - `defaultAdministrationId`: preselected in the property inspector of a new key.
- * - `adoptedApiKeyHash`: SHA-256 of the per-key API key that became the global key when
+ * - `adoptedApiKeyHash`: salted scrypt hash of the per-key API key that became the global key when
  *   upgrading. A key that still carries that old value is migrated even after the global
  *   key was rotated, instead of being mistaken for an intentional override.
  */

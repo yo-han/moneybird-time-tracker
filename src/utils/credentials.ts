@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import type { KeyCredentials, PluginGlobalSettings } from '../types/moneybird.js';
 import type { GlobalSettingsStore } from './global-settings.js';
 import { logError } from './error-logging.js';
@@ -37,9 +37,34 @@ export async function resolveApiKeyFromStore(
   return resolveApiKey(settings, global);
 }
 
-/** Hash used to recognise the adopted key later without storing a second copy of it. */
+const HASH_SCHEME = 'scrypt';
+const HASH_SALT_BYTES = 16;
+const HASH_KEY_BYTES = 32;
+
+/**
+ * Hash used to recognise the adopted key later without storing a second copy of it:
+ * `scrypt:<salt hex>:<hash hex>`, with a fresh random salt. scrypt instead of a plain
+ * digest, because this is a derived value of a secret; it is computed once per migrated
+ * key, so its cost does not matter.
+ */
 export function hashApiKey(apiKey: string): string {
-  return createHash('sha256').update(apiKey.trim()).digest('hex');
+  const salt = randomBytes(HASH_SALT_BYTES);
+  const hash = scryptSync(apiKey.trim(), salt, HASH_KEY_BYTES);
+  return `${HASH_SCHEME}:${salt.toString('hex')}:${hash.toString('hex')}`;
+}
+
+/** True when `apiKey` is the key that `storedHash` was made from. */
+export function matchesApiKeyHash(apiKey: string, storedHash: string | undefined): boolean {
+  const [scheme, saltHex, hashHex, ...rest] = storedHash?.split(':') ?? [];
+  if (scheme !== HASH_SCHEME || !saltHex || !hashHex || rest.length > 0) {
+    return false;
+  }
+  const expected = Buffer.from(hashHex, 'hex');
+  if (expected.length !== HASH_KEY_BYTES) {
+    return false;
+  }
+  const actual = scryptSync(apiKey.trim(), Buffer.from(saltHex, 'hex'), HASH_KEY_BYTES);
+  return timingSafeEqual(actual, expected);
 }
 
 function withoutApiKey<T extends KeyCredentials>(settings: T): T {
@@ -70,7 +95,6 @@ export async function adoptPerKeyApiKey<T extends KeyCredentials>(
     return settings;
   }
 
-  const ownHash = hashApiKey(ownKey);
   const global = await store.update(current => {
     if (current.apiKey) {
       return current;
@@ -78,7 +102,7 @@ export async function adoptPerKeyApiKey<T extends KeyCredentials>(
     const adopted: PluginGlobalSettings = {
       ...current,
       apiKey: ownKey,
-      adoptedApiKeyHash: ownHash,
+      adoptedApiKeyHash: hashApiKey(ownKey),
     };
     if (!current.defaultAdministrationId && settings.administrationId) {
       adopted.defaultAdministrationId = settings.administrationId;
@@ -86,7 +110,7 @@ export async function adoptPerKeyApiKey<T extends KeyCredentials>(
     return adopted;
   });
 
-  if (global.apiKey === ownKey || global.adoptedApiKeyHash === ownHash) {
+  if (global.apiKey === ownKey || matchesApiKeyHash(ownKey, global.adoptedApiKeyHash)) {
     return withoutApiKey(settings);
   }
 

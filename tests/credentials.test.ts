@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   adoptPerKeyApiKey,
   hashApiKey,
+  matchesApiKeyHash,
   migrateKeyCredentials,
   resolveApiKey,
   resolveApiKeyFromStore,
@@ -49,11 +50,9 @@ test('a per-key API key becomes the global key when there is none yet', async ()
 
   const migrated = await adoptPerKeyApiKey(runningKey, fake.store);
 
-  assert.deepEqual(fake.stored(), {
-    apiKey: 'key-a',
-    adoptedApiKeyHash: hashApiKey('key-a'),
-    defaultAdministrationId: '100',
-  });
+  const { adoptedApiKeyHash, ...rest } = fake.stored();
+  assert.deepEqual(rest, { apiKey: 'key-a', defaultAdministrationId: '100' });
+  assert.equal(matchesApiKeyHash('key-a', adoptedApiKeyHash), true);
   assert.equal(migrated.apiKey, undefined);
   assert.equal('apiKey' in migrated, false);
   // The running timer is untouched.
@@ -63,14 +62,27 @@ test('a per-key API key becomes the global key when there is none yet', async ()
   assert.equal(migrated.administrationId, '100');
 });
 
-test('the adopted key is stored trimmed, and no hash of the key is ever the key itself', async () => {
+test('the adopted key is stored trimmed, and only a salted scrypt hash of it is kept', async () => {
   const fake = createStore();
 
   await adoptPerKeyApiKey({ ...runningKey, apiKey: '  key-a  ' }, fake.store);
 
+  const stored = fake.stored().adoptedApiKeyHash ?? '';
   assert.equal(fake.stored().apiKey, 'key-a');
-  assert.notEqual(fake.stored().adoptedApiKeyHash, 'key-a');
-  assert.match(fake.stored().adoptedApiKeyHash ?? '', /^[0-9a-f]{64}$/);
+  assert.match(stored, /^scrypt:[0-9a-f]{32}:[0-9a-f]{64}$/);
+  assert.equal(stored.includes('key-a'), false);
+  assert.equal(matchesApiKeyHash('key-a', stored), true);
+});
+
+test('matchesApiKeyHash only matches the hashed key, and rejects unknown formats', () => {
+  const stored = hashApiKey('key-a');
+
+  assert.notEqual(hashApiKey('key-a'), stored); // a fresh salt every time
+  assert.equal(matchesApiKeyHash(' key-a ', stored), true);
+  assert.equal(matchesApiKeyHash('key-b', stored), false);
+  assert.equal(matchesApiKeyHash('key-a', undefined), false);
+  assert.equal(matchesApiKeyHash('key-a', 'a'.repeat(64)), false);
+  assert.equal(matchesApiKeyHash('key-a', stored.replace(/.$/, '')), false);
 });
 
 test('a per-key key equal to the global key is removed from the key', async () => {
