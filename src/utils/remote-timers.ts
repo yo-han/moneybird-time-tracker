@@ -7,6 +7,9 @@ import type { MoneybirdTimeEntry, TimerSettings } from '../types/moneybird.js';
  */
 export const PICK_UP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/** A start this far ahead of the plugin's clock is still taken as clock skew, not more. */
+export const CLOCK_SKEW_MS = 2 * 60 * 1000;
+
 export type KeySnapshot = { id: string; settings: TimerSettings };
 
 export type RemoteTimerDecision = {
@@ -54,7 +57,8 @@ export function decideRemoteTimers(
       entry.ended_at === null &&
       !shownEntryIds.has(entry.id) &&
       Number.isFinite(startedAt) &&
-      now.getTime() - startedAt <= PICK_UP_WINDOW_MS;
+      now.getTime() - startedAt <= PICK_UP_WINDOW_MS &&
+      startedAt - now.getTime() <= CLOCK_SKEW_MS;
     if (!isRecentAndRunning) {
       continue;
     }

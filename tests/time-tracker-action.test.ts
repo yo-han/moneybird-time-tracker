@@ -67,6 +67,9 @@ function createFakeService() {
     users?: Array<{ id: string; name: string; email: string }>;
     recentEntries?: MoneybirdTimeEntry[];
     lookupError?: Error;
+    lookupErrorForUser?: string;
+    beforeLookup?: () => Promise<void>;
+    timeEntryError?: Error;
     timeEntry?: Partial<MoneybirdTimeEntry>;
   } = {
     startTimer: async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry,
@@ -91,13 +94,20 @@ function createFakeService() {
       getContacts: async () => [],
       getRecentTimeEntries: async (userId: string) => {
         lookups.push({ apiKey, administrationId, userId });
+        await state.beforeLookup?.();
         if (state.lookupError) {
           throw state.lookupError;
+        }
+        if (state.lookupErrorForUser === userId) {
+          throw new MoneybirdApiError('Server error: 503', 503);
         }
         return state.recentEntries ?? [];
       },
       getTimeEntry: async (timeEntryId: string) => {
         entryFetches.push(timeEntryId);
+        if (state.timeEntryError) {
+          throw state.timeEntryError;
+        }
         return { id: timeEntryId, ended_at: null, ...state.timeEntry } as MoneybirdTimeEntry;
       },
       startTimer: async () => {
@@ -840,6 +850,21 @@ test('a stop press does not overwrite an end time set elsewhere', async () => {
   assert.equal(fake.current().isRunning, false);
 });
 
+test('a failed lookup for one user does not stop the lookup for another', async () => {
+  const { fake, service, tracker } = setup({ ...configured });
+  const other = addKey(tracker, { ...configured, userId: '8' });
+  service.state.lookupErrorForUser = '3';
+  service.state.recentEntries = [remoteEntry({ user_id: '8' })];
+  await appear(tracker, fake);
+  await appear(tracker, other);
+
+  await tracker.syncWithMoneybird();
+
+  assert.equal(service.lookups.length, 2);
+  assert.equal(other.current().isRunning, true);
+  assert.equal(fake.current().isRunning, undefined);
+});
+
 test('a failed lookup leaves the keys as they are and shows no error', async () => {
   const start = new Date(Date.now() - 30 * MINUTE_MS);
   const { fake, service, tracker } = setup(runningSince(start, { timerAdministrationId: '1' }));
@@ -974,4 +999,106 @@ test('keys look up Moneybird shortly after they appear and then every minute', a
   mock.timers.tick(60_000);
   await flushPromises();
   assert.equal(service.lookups.length, 2);
+});
+
+test('auto-stop does not overwrite an end time set elsewhere', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const start = new Date(Date.now() - 5 * HOUR_MS);
+  const { fake, service, tracker } = setup(
+    runningSince(start, { timerAdministrationId: '1', autoStopEnabled: true, autoStopHours: 4 })
+  );
+  // Stopped on the phone after one hour, while this computer was off.
+  service.state.timeEntry = { ended_at: new Date(start.getTime() + HOUR_MS).toISOString() };
+
+  await appear(tracker, fake);
+  mock.timers.tick(1_000);
+  await flushPromises();
+
+  assert.deepEqual(service.entryFetches, ['entry-1']);
+  assert.equal(service.stopCalls.length, 0);
+  assert.equal(fake.current().isRunning, false);
+});
+
+test('a running key whose entry started before the lookup period is checked on its own', async () => {
+  const start = new Date(Date.now() - 3 * 24 * HOUR_MS);
+  const { fake, service, tracker } = setup(runningSince(start, { timerAdministrationId: '1' }));
+  service.state.recentEntries = [];
+  service.state.timeEntry = { ended_at: new Date(Date.now() - HOUR_MS).toISOString() };
+  await appear(tracker, fake);
+
+  await tracker.syncWithMoneybird();
+
+  assert.deepEqual(service.entryFetches, ['entry-1']);
+  assert.equal(fake.current().isRunning, false);
+  assert.equal(service.stopCalls.length, 0);
+});
+
+test('a stop still goes out when the entry cannot be read first', async () => {
+  const start = new Date(Date.now() - 30 * MINUTE_MS);
+  const { fake, service, keyDown } = setup(runningSince(start, { timerAdministrationId: '1' }));
+  service.state.timeEntryError = new MoneybirdApiError('Server error: 503', 503);
+
+  await keyDown();
+
+  assert.equal(service.stopCalls.length, 1);
+  assert.equal(fake.current().isRunning, false);
+});
+
+test('a key with a request in flight is skipped, and does not hold up the lookup', async () => {
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  let finishStart: (entry: MoneybirdTimeEntry) => void = () => {};
+  service.state.startTimer = () =>
+    new Promise(resolve => {
+      finishStart = resolve;
+    });
+  service.state.recentEntries = [remoteEntry()];
+  await appear(tracker, fake);
+
+  const press = keyDown();
+  await flushPromises();
+  // The start request hangs; the lookup must still finish.
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.current().timeEntryId, undefined);
+  finishStart({ id: 'entry-1' } as MoneybirdTimeEntry);
+  await press;
+  assert.equal(fake.current().timeEntryId, 'entry-1');
+});
+
+test('a key that appears during a lookup gets its own lookup right after', async () => {
+  const { fake, service, tracker } = setup({ ...configured, projectId: '5' });
+  const late = addKey(tracker, { ...configured });
+  service.state.recentEntries = [remoteEntry()];
+  await appear(tracker, fake);
+
+  let appearLate: () => Promise<void> = async () => {};
+  service.state.beforeLookup = async () => {
+    service.state.beforeLookup = undefined;
+    await appearLate();
+  };
+  appearLate = async () => {
+    await appear(tracker, late);
+    // Its own one-second lookup would be folded into the run in progress.
+    void tracker.syncWithMoneybird();
+  };
+
+  await tracker.syncWithMoneybird();
+  await flushPromises();
+
+  assert.equal(late.current().isRunning, true);
+  assert.equal(service.lookups.length, 2);
+});
+
+test('a key whose administration changed during the lookup does not pick up the entry', async () => {
+  const { fake, service, tracker } = setup({ ...configured });
+  service.state.recentEntries = [remoteEntry()];
+  service.state.beforeLookup = async () => {
+    // The property inspector saves another administration while Moneybird answers.
+    await fake.action.setSettings({ ...fake.current(), administrationId: '9' });
+  };
+  await appear(tracker, fake);
+
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.current().isRunning, undefined);
 });

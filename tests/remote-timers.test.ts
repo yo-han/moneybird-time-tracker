@@ -109,3 +109,15 @@ test('only keys with the entry project count as candidates', () => {
     ['k1']
   );
 });
+
+test('an entry that starts in the future is not picked up', () => {
+  const inTenMinutes = new Date(now.getTime() + 10 * 60 * 1000).toISOString();
+  const decision = decideRemoteTimers(
+    [{ id: 'k1', settings: idle }],
+    [entry('a', { started_at: inTenMinutes })],
+    now,
+    new Set()
+  );
+
+  assert.deepEqual(decision.pickUp, []);
+});

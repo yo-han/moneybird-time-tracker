@@ -129,6 +129,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   private syncInterval: NodeJS.Timeout | undefined;
   private syncSoonTimeout: NodeJS.Timeout | undefined;
   private syncRun: Promise<void> | undefined;
+  private syncAgain = false;
 
   constructor(
     private readonly createService: CreateTimerService = createMoneybirdService,
@@ -362,13 +363,21 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
    * tries again. Runs never overlap.
    */
   syncWithMoneybird(): Promise<void> {
-    if (!this.syncRun) {
-      this.syncRun = this.runSync()
-        .catch(error => logError(streamDeck.logger, 'Error syncing timers with Moneybird', error))
-        .finally(() => {
-          this.syncRun = undefined;
-        });
+    if (this.syncRun) {
+      // A key that appeared after the run took its snapshot gets one more run right after.
+      this.syncAgain = true;
+      return this.syncRun;
     }
+    this.syncRun = (async () => {
+      do {
+        this.syncAgain = false;
+        await this.runSync().catch(error =>
+          logError(streamDeck.logger, 'Error syncing timers with Moneybird', error)
+        );
+      } while (this.syncAgain && this.visibleKeys.size > 0);
+    })().finally(() => {
+      this.syncRun = undefined;
+    });
     return this.syncRun;
   }
 
@@ -422,26 +431,55 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         continue;
       }
 
+      // A key with a press in flight is left to that press; its request (a start has no
+      // timeout) must not hold up the lookup for every other key.
+      const members = group.members.filter(member => !this.requestsInFlight.has(member.action.id));
+      const service = this.createService(group.apiKey, group.administrationId);
+      const knownIds = new Set(entries.map(entry => entry.id));
+      // A running entry that started before the lookup period is not in the list: read it
+      // on its own, so a stop elsewhere is still noticed.
+      const olderEntries = await Promise.all(
+        members
+          .filter(
+            member =>
+              member.settings.isRunning === true &&
+              member.settings.timeEntryId &&
+              !knownIds.has(member.settings.timeEntryId)
+          )
+          .map(member =>
+            service.getTimeEntry(member.settings.timeEntryId as string).catch(error => {
+              logError(streamDeck.logger, 'Could not check a running timer', error, {
+                timeEntryId: member.settings.timeEntryId,
+              });
+              return undefined;
+            })
+          )
+      );
+
       const decision = decideRemoteTimers(
-        group.members.map(member => ({ id: member.action.id, settings: member.settings })),
-        entries,
+        members.map(member => ({ id: member.action.id, settings: member.settings })),
+        [...entries, ...olderEntries.filter(entry => entry !== undefined)],
         now,
         shownEntryIds
       );
-      const actions = new Map(group.members.map(member => [member.action.id, member.action]));
+      const actions = new Map(members.map(member => [member.action.id, member.action]));
 
-      for (const { keyId, entry } of decision.endedElsewhere) {
-        const action = actions.get(keyId);
-        if (action) {
-          await this.releaseStoppedElsewhere(action, entry.id);
-        }
-      }
-      for (const { keyId, entry } of decision.pickUp) {
-        const action = actions.get(keyId);
-        if (action) {
-          await this.pickUpRemoteTimer(action, entry, group.administrationId);
-        }
-      }
+      const tasks = [
+        ...decision.endedElsewhere.map(({ keyId, entry }) => {
+          const action = actions.get(keyId);
+          return action ? this.releaseStoppedElsewhere(action, entry.id) : undefined;
+        }),
+        ...decision.pickUp.map(({ keyId, entry }) => {
+          const action = actions.get(keyId);
+          return action ? this.pickUpRemoteTimer(action, entry, group.administrationId) : undefined;
+        }),
+      ];
+      // Different keys do not wait for each other's queue.
+      await Promise.all(
+        tasks.map(task =>
+          task?.catch(error => logError(streamDeck.logger, 'Error applying a timer sync', error))
+        )
+      );
     }
   }
 
@@ -471,11 +509,14 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       const latest = await action.getSettings();
       if (
         latest.isRunning ||
+        latest.administrationId !== administrationId ||
         latest.userId !== entry.user_id ||
         latest.projectId !== entry.project_id
       ) {
         return;
       }
+      // An error flash from an earlier press would otherwise redraw the key as idle.
+      clearTimeoutForKey(this.displayResetTimeouts, action.id);
 
       const timerState = {
         isRunning: true,
@@ -777,6 +818,12 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         throw new Error('No Moneybird API key configured');
       }
       const moneybirdService = this.createService(apiKey, timerAdministrationOf(settings));
+      if (await this.isStoppedElsewhere(moneybirdService, settings.timeEntryId)) {
+        // Stopped elsewhere while the key could not see it (asleep, offline): keep that end.
+        streamDeck.logger.info(`Timer ${settings.timeEntryId} was already stopped elsewhere`);
+        await this.resetToIdle(action, settings);
+        return;
+      }
       await moneybirdService.stopTimer(settings.timeEntryId, endedAt);
     } catch (error) {
       logError(streamDeck.logger, 'Error during auto-stop', error, {
