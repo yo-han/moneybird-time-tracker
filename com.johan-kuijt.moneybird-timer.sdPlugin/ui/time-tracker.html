@@ -437,8 +437,9 @@
                     const handleAdminChange = (newValue) => {
                         if (newValue !== lastValue) {
                             lastValue = newValue;
-                            // A running timer keeps its administration; the plugin would
-                            // refuse the change and put the old one back.
+                            // A running timer keeps its administration, so no lists are
+                            // loaded for another one. The select is disabled meanwhile, so
+                            // this only stops a change that did not come from the user.
                             if (currentSettings.isRunning === true) {
                                 return;
                             }
@@ -509,8 +510,9 @@
                             // Set the value again to ensure it's selected
                             adminElement.value = settings.administrationId;
                             
-                            // If this is a new administration selection (no projects loaded yet), load the data
-                            if (!settings.projects || Object.keys(settings.projects).length === 0) {
+                            // If this is a new administration selection (no projects loaded yet), load the data.
+                            // Not while a timer runs: its administration is locked.
+                            if (settings.isRunning !== true && (!settings.projects || Object.keys(settings.projects).length === 0)) {
                                 setTimeout(() => {
                                     loadAdministrationData(settings.administrationId);
                                 }, 200);

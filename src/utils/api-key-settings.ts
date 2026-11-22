@@ -92,8 +92,9 @@ function describeFailure(error: unknown): string {
  * lists that depend on it. Returns the changes to apply, not a full settings object.
  *
  * Selections that still exist are kept; an administration the key cannot open is cleared
- * with its lists. A key with a running timer keeps its selections, and refuses an API key
- * that cannot open the timer's administration.
+ * with its lists. A key with a running timer refuses an API key that cannot open the
+ * administration of its entry, and keeps the selections of the administration it shows
+ * when the new key can open that one too.
  */
 async function loadLists(
   settings: KeyCredentials,

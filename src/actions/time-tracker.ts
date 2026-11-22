@@ -216,6 +216,14 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         `Fetched ${rawProjects.length} projects, ${rawUsers.length} users and ${rawContacts.length} contacts for administration ${administrationId}`
       );
 
+      // The key may have been pressed while the lists loaded: a timer that started
+      // meanwhile keeps its administration and selections too.
+      const latestSettings = await ev.action.getSettings();
+      if (latestSettings.isRunning) {
+        await this.refuseAdministrationChange(ev.action, latestSettings, administrationId);
+        return;
+      }
+
       await writePatch(ev.action, {
         values: {
           administrationId,

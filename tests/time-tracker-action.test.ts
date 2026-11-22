@@ -362,8 +362,8 @@ test('auto-stop stops the entry with the global key', async () => {
   assert.deepEqual(service.usedApiKeys, ['global-key']);
 });
 
-test('a timer started while the administration lists load is kept', async () => {
-  const { fake, service, tracker } = setup({ ...configured });
+test('a timer started while the administration lists load is kept, and the change refused', async () => {
+  const { fake, service, tracker, notices } = setup({ ...configured });
   // The key is pressed while Moneybird answers the projects request.
   service.state.beforeLists = async () => {
     await fake.action.setSettings({
@@ -380,13 +380,16 @@ test('a timer started while the administration lists load is kept', async () => 
     payload: { event: 'administrationSelected', administrationId: '9' },
   } as unknown as SendToPluginEvent<{ event: 'administrationSelected' }, TimerSettings>);
 
-  // The change started before the timer did, so it is applied; the timer keeps the
-  // administration its entry lives in (#205).
-  assert.equal(fake.current().administrationId, '9');
-  assert.deepEqual(fake.current().projects, {});
+  // The timer started while the lists loaded, so the change is refused after all: the key
+  // keeps its administration and selections (#205).
   assert.equal(fake.current().isRunning, true);
   assert.equal(fake.current().timeEntryId, 'entry-7');
   assert.equal(fake.current().timerAdministrationId, '1');
+  assert.equal(fake.current().administrationId, '1');
+  assert.equal(fake.current().projectId, '2');
+  assert.equal(fake.current().userId, '3');
+  assert.equal(fake.current().projects, undefined);
+  assert.equal(notices.length, 1);
 });
 
 test('an administration change sent after a slower list load is applied last', async () => {
