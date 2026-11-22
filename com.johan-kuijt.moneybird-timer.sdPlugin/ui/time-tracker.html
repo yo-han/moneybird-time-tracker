@@ -33,7 +33,7 @@
     <!-- Shared by every key. No setting attribute: the plugin stores it in its global
          settings once Moneybird accepted it, never in the settings of this key. -->
     <sdpi-item label="API Key">
-        <sdpi-textfield id="globalApiKey" type="password" placeholder="Shared by all keys"></sdpi-textfield>
+        <sdpi-password id="globalApiKey" placeholder="Shared by all keys"></sdpi-password>
         <div id="globalApiKeyError" class="error hidden"></div>
         <div id="runningKeyWarning" class="warning hidden">A timer is running on this key. An API key from another Moneybird account cannot stop it.</div>
     </sdpi-item>
@@ -43,7 +43,7 @@
     </sdpi-item>
 
     <sdpi-item id="ownApiKeyItem" label="Key for this key" class="hidden">
-        <sdpi-textfield id="apiKey" setting="apiKey" type="password" placeholder="For another Moneybird account"></sdpi-textfield>
+        <sdpi-password id="apiKey" setting="apiKey" placeholder="For another Moneybird account"></sdpi-password>
         <div id="apiKeyError" class="error hidden"></div>
     </sdpi-item>
 
