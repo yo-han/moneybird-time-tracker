@@ -51,6 +51,7 @@
         <sdpi-select id="administrationId" setting="administrationId">
             <option value="">Select an administration</option>
         </sdpi-select>
+        <div id="administrationLockedNote" class="warning hidden">Stop the running timer to change the administration.</div>
         <div id="administrationError" class="error hidden"></div>
     </sdpi-item>
 
@@ -305,6 +306,20 @@
             }
         }
 
+        // While the timer runs, its entry lives in this administration: changing it would
+        // leave the timer unstoppable from the key (#205).
+        function syncAdministrationLock(settings) {
+            const running = settings.isRunning === true;
+            const adminElement = document.getElementById('administrationId');
+            if (adminElement) {
+                adminElement.disabled = running;
+            }
+            document.getElementById('administrationLockedNote')?.classList.toggle('hidden', !running);
+            if (!running) {
+                hideError('administration');
+            }
+        }
+
         function syncApiKeyFields(settings) {
             ownApiKeyEnabled = settings.apiKeyIsOverride === true;
             const checkbox = document.getElementById('apiKeyIsOverride');
@@ -422,6 +437,11 @@
                     const handleAdminChange = (newValue) => {
                         if (newValue !== lastValue) {
                             lastValue = newValue;
+                            // A running timer keeps its administration; the plugin would
+                            // refuse the change and put the old one back.
+                            if (currentSettings.isRunning === true) {
+                                return;
+                            }
                             loadAdministrationData(newValue);
                         }
                     };
@@ -466,6 +486,7 @@
                 // Update form fields
                 updateFormFields(settings);
                 syncApiKeyFields(settings);
+                syncAdministrationLock(settings);
 
                 // A new key, or one whose lists were never loaded: load them with the
                 // shared key (or this key's own key). Once per opened property inspector.
@@ -537,6 +558,8 @@
                 showError(fieldId, message.message || 'Moneybird rejected this API key');
             } else if (message.event === 'apiKeyAccepted') {
                 hideError(fieldId);
+            } else if (message.event === 'administrationRejected') {
+                showError('administration', message.message || 'Stop the running timer first');
             }
         });
 
