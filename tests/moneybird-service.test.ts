@@ -6,6 +6,7 @@ import {
   MONEYBIRD_MAX_PAGES,
   MONEYBIRD_PAGE_SIZE,
   MONEYBIRD_REQUEST_TIMEOUT_MS,
+  MONEYBIRD_START_TIMEOUT_MS,
   MoneybirdService,
 } from '../src/services/moneybird.js';
 import { MoneybirdApiError } from '../src/services/moneybird/error-handler.js';
@@ -400,7 +401,7 @@ test('createInvoiceFromTimeEntries returns no unlinked ids when every link succe
   assert.deepEqual(result.unlinkedEntryIds, []);
 });
 
-test('creating requests carry no timeout, reads and updates do', async () => {
+test('the invoice POST carries no timeout, the start POST a long one, reads and updates the normal one', async () => {
   const http = createHttpClient();
   http.responses.post = { id: 'new' };
   http.responses.get = [billableEntry('1')];
@@ -418,7 +419,10 @@ test('creating requests carry no timeout, reads and updates do', async () => {
 
   for (const call of http.calls) {
     const timeout = (call.config as { timeout?: number }).timeout;
-    if (call.method === 'post') {
+    if (call.method === 'post' && call.url.endsWith('/time_entries.json')) {
+      // A start that never answers would block the key; see the recovery in the time tracker.
+      assert.equal(timeout, MONEYBIRD_START_TIMEOUT_MS, `${call.method} ${call.url}`);
+    } else if (call.method === 'post') {
       assert.equal(timeout, undefined, `${call.method} ${call.url}`);
     } else {
       assert.equal(timeout, MONEYBIRD_REQUEST_TIMEOUT_MS, `${call.method} ${call.url}`);

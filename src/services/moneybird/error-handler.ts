@@ -20,6 +20,20 @@ export function isMoneybirdNotFound(error: unknown): boolean {
   return error instanceof MoneybirdApiError && error.status === 404;
 }
 
+/**
+ * True when Moneybird answered and refused the request (4xx), so it certainly created
+ * nothing. Anything else (no answer, a timeout, a 5xx from a gateway, a cut-off 2xx body)
+ * leaves the outcome unknown.
+ */
+export function isRejectedByMoneybird(error: unknown): boolean {
+  return (
+    error instanceof MoneybirdApiError &&
+    error.status !== undefined &&
+    error.status >= 400 &&
+    error.status < 500
+  );
+}
+
 export function isMoneybirdRateLimited(error: unknown): boolean {
   return error instanceof MoneybirdApiError && error.status === 429;
 }

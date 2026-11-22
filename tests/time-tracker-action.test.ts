@@ -54,6 +54,7 @@ function createFakeService() {
   const usedApiKeys: string[] = [];
   const usedAdministrationIds: Array<string | undefined> = [];
   const lookups: Array<{ apiKey: string; administrationId?: string; userId: string }> = [];
+  const lookupPeriods: Array<{ since: Date; until: Date }> = [];
   const entryFetches: string[] = [];
   const state: {
     startTimer: () => Promise<MoneybirdTimeEntry>;
@@ -92,8 +93,9 @@ function createFakeService() {
       },
       getUsers: async () => state.users ?? [],
       getContacts: async () => [],
-      getRecentTimeEntries: async (userId: string) => {
+      getRecentTimeEntries: async (userId: string, since: Date, until: Date) => {
         lookups.push({ apiKey, administrationId, userId });
+        lookupPeriods.push({ since, until });
         await state.beforeLookup?.();
         if (state.lookupError) {
           throw state.lookupError;
@@ -121,7 +123,16 @@ function createFakeService() {
     };
   };
 
-  return { factory, state, stopCalls, usedApiKeys, usedAdministrationIds, lookups, entryFetches };
+  return {
+    factory,
+    state,
+    stopCalls,
+    usedApiKeys,
+    usedAdministrationIds,
+    lookups,
+    lookupPeriods,
+    entryFetches,
+  };
 }
 
 const configured: TimerSettings = {
@@ -1133,3 +1144,170 @@ test(
     assert.equal(fake.current().timeEntryId, 'entry-1');
   }
 );
+
+// ---- A start request that gets no answer (#208) ----
+
+/** 20 s after a whole minute, so the press minute cannot roll over during a test. */
+const FROZEN_NOW = Date.parse('2026-11-22T10:00:20.000Z');
+const freezeClock = () => mock.timers.enable({ apis: ['Date'], now: FROZEN_NOW });
+
+const noResponse = () => new MoneybirdApiError('No response received from Moneybird API.');
+
+/** The minute Moneybird stores for a press now. */
+const pressMinute = () => new Date(Math.floor(Date.now() / 60_000) * 60_000).toISOString();
+
+test('a start without an answer takes the entry Moneybird created anyway', async () => {
+  freezeClock();
+  const { fake, service, keyDown } = setup({ ...configured });
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  // Moneybird created the entry at the press (rounded down to the minute) before the line dropped.
+  service.state.recentEntries = [remoteEntry({ id: 'created-1', started_at: pressMinute() })];
+
+  await keyDown();
+
+  assert.equal(service.state.startCount, 1);
+  assert.equal(service.lookups.length, 1);
+  // A day of margin on both sides of the press, for Moneybird's date in its own time zone.
+  assert.ok(service.lookupPeriods[0].since.getTime() <= FROZEN_NOW - 24 * HOUR_MS);
+  assert.ok(service.lookupPeriods[0].until.getTime() >= FROZEN_NOW + 24 * HOUR_MS);
+  assert.equal(fake.current().isRunning, true);
+  assert.equal(fake.current().timeEntryId, 'created-1');
+  assert.ok(!fake.titles.includes('Error'));
+});
+
+test('a start without an answer and no entry found reports the failure and does not retry', async () => {
+  freezeClock();
+  const { fake, service, keyDown } = setup({ ...configured });
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  service.state.recentEntries = [
+    // Same project, but started a minute earlier: another entry, not this press.
+    remoteEntry({ started_at: new Date(Date.parse(pressMinute()) - 60_000).toISOString() }),
+  ];
+
+  await keyDown();
+
+  assert.equal(service.lookups.length, 1);
+  assert.equal(service.state.startCount, 1);
+  assert.equal(fake.current().isRunning, undefined);
+  assert.equal(fake.titles.at(-1), 'Error');
+});
+
+test('a start without an answer whose check also fails reports the failure', async () => {
+  freezeClock();
+  const { fake, service, keyDown } = setup({ ...configured });
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  service.state.lookupError = new MoneybirdApiError('No response');
+
+  await keyDown();
+
+  assert.equal(service.lookups.length, 1);
+  assert.equal(service.state.startCount, 1);
+  assert.equal(fake.current().isRunning, undefined);
+  assert.equal(fake.titles.at(-1), 'Error');
+});
+
+test('a start that Moneybird rejected is not looked up', async () => {
+  freezeClock();
+  const { fake, service, keyDown } = setup({ ...configured });
+  service.state.startTimer = async () => {
+    throw new MoneybirdApiError('Request rejected by Moneybird (422)', 422);
+  };
+  service.state.recentEntries = [remoteEntry()];
+
+  await keyDown();
+
+  assert.equal(service.lookups.length, 0);
+  assert.equal(fake.current().isRunning, undefined);
+});
+
+test('after a start without an answer, a stopped entry or another project is not taken', async () => {
+  freezeClock();
+  const { fake, service, keyDown } = setup({ ...configured });
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  const minute = pressMinute();
+  service.state.recentEntries = [
+    remoteEntry({ id: 'stopped', started_at: minute, ended_at: new Date().toISOString() }),
+    remoteEntry({ id: 'other-project', started_at: minute, project_id: '5' }),
+  ];
+
+  await keyDown();
+
+  assert.equal(service.lookups.length, 1);
+  assert.equal(fake.current().isRunning, undefined);
+  assert.equal(fake.titles.at(-1), 'Error');
+});
+
+test('a gateway error on the start is looked up too, since the entry may exist', async () => {
+  freezeClock();
+  const { fake, service, keyDown } = setup({ ...configured });
+  service.state.startTimer = async () => {
+    throw new MoneybirdApiError('Server error: 504', 504);
+  };
+  service.state.recentEntries = [remoteEntry({ id: 'created-1', started_at: pressMinute() })];
+
+  await keyDown();
+
+  assert.equal(fake.current().timeEntryId, 'created-1');
+});
+
+test('after a start without an answer, an entry with another description is not taken', async () => {
+  freezeClock();
+  const { fake, service, keyDown } = setup({ ...configured, description: 'Review' });
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  service.state.recentEntries = [
+    remoteEntry({ started_at: pressMinute(), description: 'Meeting' }),
+  ];
+
+  await keyDown();
+
+  assert.equal(service.lookups.length, 1);
+  assert.equal(fake.current().isRunning, undefined);
+});
+
+test('after a start without an answer, the entry another key shows is not taken', async () => {
+  freezeClock();
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  const other = addKey(
+    tracker,
+    runningSince(new Date(), { timeEntryId: 'other-key-entry', timerAdministrationId: '1' })
+  );
+  await appear(tracker, fake);
+  await appear(tracker, other);
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  service.state.recentEntries = [remoteEntry({ id: 'other-key-entry', started_at: pressMinute() })];
+
+  await keyDown();
+
+  assert.equal(service.lookups.length, 1);
+  assert.equal(fake.current().isRunning, undefined);
+  assert.equal(other.current().timeEntryId, 'other-key-entry');
+});
+
+test('after a start without an answer, two matching entries are both left alone', async () => {
+  freezeClock();
+  const { fake, service, keyDown } = setup({ ...configured });
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  service.state.recentEntries = [
+    remoteEntry({ id: 'a', started_at: pressMinute() }),
+    remoteEntry({ id: 'b', started_at: pressMinute() }),
+  ];
+
+  await keyDown();
+
+  assert.equal(service.lookups.length, 1);
+  assert.equal(fake.current().isRunning, undefined);
+});

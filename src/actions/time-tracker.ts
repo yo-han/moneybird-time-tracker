@@ -9,7 +9,10 @@ import streamDeck, {
   DidReceiveSettingsEvent,
 } from '@elgato/streamdeck';
 import { MoneybirdService } from '../services/moneybird.js';
-import { isPermanentRequestError } from '../services/moneybird/error-handler.js';
+import {
+  isPermanentRequestError,
+  isRejectedByMoneybird,
+} from '../services/moneybird/error-handler.js';
 import {
   TimerSettings,
   projectToJson,
@@ -50,6 +53,7 @@ import {
 } from '../utils/settings-writes.js';
 import { timerAdministrationOf } from '../utils/running-timer.js';
 import { PICK_UP_WINDOW_MS, decideRemoteTimers } from '../utils/remote-timers.js';
+import { DEFAULT_TIME_ENTRY_DESCRIPTION } from '../services/moneybird/payloads.js';
 import type { GlobalSettingsStore } from '../utils/global-settings.js';
 import { notifyPropertyInspector, pluginGlobalSettings } from '../utils/plugin-global-settings.js';
 
@@ -74,6 +78,8 @@ function createMoneybirdService(apiKey: string, administrationId?: string): Time
 }
 
 const MS_PER_HOUR = 60 * 60 * 1000;
+const MS_PER_MINUTE = 60 * 1000;
+const MS_PER_DAY = 24 * MS_PER_HOUR;
 const DISPLAY_REFRESH_MS = 1000;
 const ERROR_DISPLAY_MS = 2000;
 const AUTO_STOP_NOTICE_MS = 3000;
@@ -462,7 +468,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       );
       // Every key takes part in the decision (a key mid-start still wins its own entry by
       // description), but a key with a press in flight is left to that press: its request
-      // (a start has no timeout) must not hold up the sync for every other key. Checked
+      // (a start may take up to a minute) must not hold up the sync for every other key. Checked
       // here, after the last await, so a press that started meanwhile is seen too.
       const actions = new Map(
         members
@@ -599,9 +605,29 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   ): Promise<void> {
     const instanceId = action.id;
 
+    let timeEntry: MoneybirdTimeEntry | undefined;
     try {
-      const timeEntry = await moneybirdService.startTimer(settings, startedAt);
+      timeEntry = await moneybirdService.startTimer(settings, startedAt);
+    } catch (error: unknown) {
+      logError(streamDeck.logger, 'Error starting timer', error, { instanceId });
+      // Unless Moneybird refused it, it may have created the entry anyway (a timeout, a
+      // dropped connection, a cut-off answer). Look for it instead of retrying, which could
+      // create a second one (#208).
+      timeEntry = isRejectedByMoneybird(error)
+        ? undefined
+        : await this.findUnansweredStart(action, moneybirdService, settings, startedAt);
+      if (!timeEntry) {
+        // Nothing was stored, so the key simply stays idle. If Moneybird did create the
+        // entry after all, the next sync with Moneybird picks it up.
+        await this.flashError(action, () => this.showIdle(action, settings));
+        return;
+      }
+      streamDeck.logger.info(
+        `Start for ${instanceId} got no answer; found entry ${timeEntry.id} in Moneybird`
+      );
+    }
 
+    try {
       const timerState = {
         isRunning: true,
         startTime: startedAt.toISOString(),
@@ -615,9 +641,56 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       await this.showRunning(action, { ...settings, ...timerState });
       streamDeck.logger.debug(`Timer started for instance ${instanceId}`);
     } catch (error: unknown) {
-      // Nothing was stored yet, so the key simply stays idle.
-      logError(streamDeck.logger, 'Error starting timer', error, { instanceId });
+      logError(streamDeck.logger, 'Error saving the started timer', error, {
+        instanceId,
+        timeEntryId: timeEntry.id,
+      });
       await this.flashError(action, () => this.showIdle(action, settings));
+    }
+  }
+
+  /**
+   * After a start whose outcome is unknown: the entry this press created, if Moneybird did.
+   * Moneybird stores the start as the press minute exactly (the payload sends HH:mm), so the
+   * entry must have that start, this key's project and description, and not be shown by
+   * another key; only a single such entry is taken.
+   */
+  private async findUnansweredStart(
+    action: TimerKeyAction,
+    moneybirdService: TimerService,
+    settings: TimerSettings,
+    startedAt: Date
+  ): Promise<MoneybirdTimeEntry | undefined> {
+    const pressMinute = Math.floor(startedAt.getTime() / MS_PER_MINUTE) * MS_PER_MINUTE;
+    const description = settings.description || DEFAULT_TIME_ENTRY_DESCRIPTION;
+    try {
+      const shownElsewhere = new Set(
+        (
+          await Promise.all(
+            Array.from(this.visibleKeys.values())
+              .filter(key => key.id !== action.id)
+              .map(key => key.getSettings())
+          )
+        ).flatMap(other => (other.isRunning && other.timeEntryId ? [other.timeEntryId] : []))
+      );
+      // A day of margin on both sides: the period is a date in Moneybird's time zone.
+      const entries = await moneybirdService.getRecentTimeEntries(
+        settings.userId,
+        new Date(startedAt.getTime() - MS_PER_DAY),
+        new Date(Date.now() + MS_PER_DAY)
+      );
+      const matches = entries.filter(
+        entry =>
+          entry.ended_at === null &&
+          entry.project_id === settings.projectId &&
+          entry.description === description &&
+          new Date(entry.started_at).getTime() === pressMinute &&
+          !shownElsewhere.has(entry.id)
+      );
+      return matches.length === 1 ? matches[0] : undefined;
+    } catch (error) {
+      logError(streamDeck.logger, 'Could not check whether the start was created', error);
+      return undefined;
     }
   }
 

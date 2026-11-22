@@ -43,11 +43,18 @@ export const MONEYBIRD_PAGE_SIZE = 100;
 /** Upper bound on pages per listing, so a misbehaving endpoint cannot loop forever. */
 export const MONEYBIRD_MAX_PAGES = 50;
 /**
- * Timeout for reads and idempotent updates. Creating requests (POST) get none: a timed out
- * POST may still have created the time entry or invoice, and treating it as a failure
- * invites a duplicate on the next press.
+ * Timeout for reads and idempotent updates. Creating an invoice (POST) gets none: a timed out
+ * POST may still have created the invoice, and treating it as a failure invites a
+ * duplicate on the next press.
  */
 export const MONEYBIRD_REQUEST_TIMEOUT_MS = 15_000;
+/**
+ * Timeout for starting a timer. Long, because a timed out start may still have created the
+ * entry; but finite, because a start that never answers keeps the key and its property
+ * inspector waiting. After a timeout the time tracker looks for the entry instead of
+ * retrying (#208).
+ */
+export const MONEYBIRD_START_TIMEOUT_MS = 60_000;
 /** Concurrent PATCH requests when linking time entries to a new invoice. */
 export const MONEYBIRD_LINK_CONCURRENCY = 4;
 /** Attempts per link request when Moneybird answers 429. */
@@ -99,7 +106,7 @@ export class MoneybirdService {
     };
   }
 
-  /** Config for creating requests: no timeout, see MONEYBIRD_REQUEST_TIMEOUT_MS. */
+  /** Config for creating requests: no timeout (the start adds its own, see MONEYBIRD_START_TIMEOUT_MS). */
   private createRequestConfig() {
     return { headers: this.headers() };
   }
@@ -224,11 +231,10 @@ export class MoneybirdService {
 
       this.logger.debug('Starting timer', { url, data: payload });
 
-      const response = await this.httpClient.post<MoneybirdTimeEntry>(
-        url,
-        payload,
-        this.createRequestConfig()
-      );
+      const response = await this.httpClient.post<MoneybirdTimeEntry>(url, payload, {
+        ...this.createRequestConfig(),
+        timeout: MONEYBIRD_START_TIMEOUT_MS,
+      });
 
       if (!response.data?.id) {
         throw new MoneybirdApiError('Moneybird did not return an id for the new time entry');
