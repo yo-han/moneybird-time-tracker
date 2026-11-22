@@ -1536,11 +1536,27 @@ test('a started timer whose display failed after the save shows running and auto
   await flushPromises();
   assert.match(fake.titles.at(-1) ?? '', /^⏱️/);
 
-  mock.timers.tick(4 * HOUR_MS);
+  await assertAutoStopsAtTheLimit(service, 2_000);
+});
+
+/**
+ * Ticks to one second before the 4 h limit (counted from the press at FROZEN_NOW, of which
+ * `elapsedMs` has passed), expects no stop yet, then one stop at the limit.
+ */
+async function assertAutoStopsAtTheLimit(
+  service: ReturnType<typeof createFakeService>,
+  elapsedMs: number
+): Promise<void> {
+  mock.timers.tick(4 * HOUR_MS - elapsedMs - 1_000);
+  await flushPromises();
+  assert.equal(service.stopCalls.length, 0);
+
+  mock.timers.tick(1_000);
   await flushPromises();
   assert.equal(service.stopCalls.length, 1);
   assert.equal(service.stopCalls[0]?.timeEntryId, 'entry-1');
-});
+  assert.equal(service.stopCalls[0]?.endedAt.getTime(), FROZEN_NOW + 4 * HOUR_MS);
+}
 
 /**
  * Lets the save succeed and then fails the given redraws after it (1 = the first `setImage`
@@ -1592,10 +1608,7 @@ test('a started timer whose redraw keeps failing after the save still auto-stops
   await flushPromises();
   assert.equal(fake.current().isRunning, true);
 
-  mock.timers.tick(4 * HOUR_MS);
-  await flushPromises();
-  assert.equal(service.stopCalls.length, 1);
-  assert.equal(service.stopCalls[0]?.timeEntryId, 'entry-1');
+  await assertAutoStopsAtTheLimit(service, 2_000);
 });
 
 test('a started timer whose display failed keeps its auto-stop through a failed stop during the flash', async () => {
