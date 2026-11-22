@@ -1521,11 +1521,17 @@ test('a press after a start whose save failed takes that entry instead of starti
   assert.equal(fake.current().startTime, startedAt);
   assert.equal('timerPickedUp' in fake.current(), false);
 
-  // Its own start: auto-stopped at the limit from the first press.
-  mock.timers.tick(4 * HOUR_MS - 10 * MINUTE_MS);
+  // Its own start: auto-stopped at the limit from the first press, not from this one.
+  const deadline = Date.parse(startedAt) + 4 * HOUR_MS;
+  mock.timers.tick(deadline - Date.now() - 1_000);
+  await flushPromises();
+  assert.equal(service.stopCalls.length, 0);
+
+  mock.timers.tick(1_000);
   await flushPromises();
   assert.equal(service.stopCalls.length, 1);
   assert.equal(service.stopCalls[0]?.timeEntryId, 'entry-1');
+  assert.equal(service.stopCalls[0]?.endedAt.getTime(), deadline);
 });
 
 test('a press a day after a start whose save failed starts a new entry', async () => {
