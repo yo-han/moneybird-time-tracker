@@ -1575,6 +1575,24 @@ test('a press for another project after an unconfirmed start starts a new entry'
   assert.equal(fake.current().timeEntryId, 'entry-2');
 });
 
+test('a press with another description after an unconfirmed start starts a new entry', async () => {
+  freezeClock();
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  await appear(tracker, fake);
+  const startedAt = await startWithFailedSave(fake, service, keyDown);
+
+  await fake.action.setSettings({ ...fake.current(), description: 'Review' });
+  service.state.recentEntries = [
+    remoteEntry({ id: 'entry-1', started_at: startedAt }),
+    remoteEntry({ id: 'other-1', description: 'Review', started_at: startedAt }),
+  ];
+  service.state.startTimer = async () => ({ id: 'entry-2' }) as MoneybirdTimeEntry;
+  await keyDown();
+
+  assert.equal(service.state.startCount, 2);
+  assert.equal(fake.current().timeEntryId, 'entry-2');
+});
+
 test("a started timer whose save failed is found later as the key's own start", async () => {
   // Real timers for the auto-stop timeout would be slow; mock them, and Date too.
   mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: FROZEN_NOW });
