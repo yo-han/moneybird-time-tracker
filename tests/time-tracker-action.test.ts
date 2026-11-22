@@ -1369,3 +1369,47 @@ test('after a start without an answer, two matching entries are both left alone'
   assert.equal(service.lookups.length, 1);
   assert.equal(fake.current().isRunning, undefined);
 });
+
+// ---- A start the key could not confirm, found later by the sync ----
+
+test('a start the key could not confirm keeps auto-stop when the sync finds it later', async () => {
+  freezeClock();
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  await appear(tracker, fake);
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  // Moneybird created the entry, but it was not in the lookup yet.
+  service.state.recentEntries = [];
+  await keyDown();
+  assert.equal(fake.current().isRunning, undefined);
+
+  service.state.recentEntries = [remoteEntry({ id: 'created-1', started_at: pressMinute() })];
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.current().timeEntryId, 'created-1');
+  assert.equal('timerPickedUp' in fake.current(), false);
+});
+
+test('an entry the key did not start is still marked as picked up', async () => {
+  freezeClock();
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  await appear(tracker, fake);
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  service.state.recentEntries = [];
+  await keyDown();
+
+  // Started a minute before the unconfirmed press, so not that start.
+  service.state.recentEntries = [
+    remoteEntry({
+      id: 'web-app',
+      started_at: new Date(Date.parse(pressMinute()) - 60_000).toISOString(),
+    }),
+  ];
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.current().timeEntryId, 'web-app');
+  assert.equal(fake.current().timerPickedUp, true);
+});
