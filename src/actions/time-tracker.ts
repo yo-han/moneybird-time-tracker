@@ -664,11 +664,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         // Nothing was stored, so the key simply stays idle. If Moneybird did create the
         // entry after all, the next sync with Moneybird picks it up, as this key's own.
         if (!isRejectedByMoneybird(error)) {
-          this.unconfirmedStarts.set(instanceId, {
-            startedAt: Math.floor(startedAt.getTime() / MS_PER_MINUTE) * MS_PER_MINUTE,
-            projectId: settings.projectId,
-            description: settings.description || DEFAULT_TIME_ENTRY_DESCRIPTION,
-          });
+          this.rememberUnconfirmedStart(instanceId, settings, startedAt);
         }
         await this.flashError(action, () => this.showIdle(action, settings));
         return;
@@ -702,8 +698,29 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         instanceId,
         timeEntryId: timeEntry.id,
       });
+      // The entry exists in Moneybird. If saving it failed, the key does not hold it:
+      // remember it like a start without an answer, so the next sync picks it up as this
+      // key's own and keeps its auto-stop. (If only the display failed, the key already
+      // holds the entry and the sync leaves it alone.)
+      this.rememberUnconfirmedStart(instanceId, settings, startedAt);
       await this.flashError(action, () => this.showIdle(action, settings));
     }
+  }
+
+  /**
+   * Remembers a start whose entry the key may not show, so the sync can tell it from a
+   * timer started elsewhere. Moneybird stores the start as the press minute exactly.
+   */
+  private rememberUnconfirmedStart(
+    instanceId: string,
+    settings: TimerSettings,
+    startedAt: Date
+  ): void {
+    this.unconfirmedStarts.set(instanceId, {
+      startedAt: Math.floor(startedAt.getTime() / MS_PER_MINUTE) * MS_PER_MINUTE,
+      projectId: settings.projectId,
+      description: settings.description || DEFAULT_TIME_ENTRY_DESCRIPTION,
+    });
   }
 
   /**
