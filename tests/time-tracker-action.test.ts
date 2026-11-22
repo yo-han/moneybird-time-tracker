@@ -19,6 +19,8 @@ const HOUR_MS = 60 * 60 * 1000;
 
 type StopCall = { timeEntryId: string; endedAt: Date; apiKey: string };
 
+let fakeActionCount = 0;
+
 function createFakeAction(initial: TimerSettings) {
   let settings = initial;
   const titles: string[] = [];
@@ -29,7 +31,8 @@ function createFakeAction(initial: TimerSettings) {
     savedSettings,
     current: () => settings,
     action: {
-      id: 'instance-1',
+      // Unique per test: the settings queue is shared by key id across the whole file.
+      id: `instance-${++fakeActionCount}`,
       isKey: () => true,
       async setTitle(title: string) {
         titles.push(title);
@@ -58,6 +61,8 @@ function createFakeService() {
     administrationsDelayMs?: number;
     listLoads?: number;
     administrations?: Array<{ id: string; name: string }>;
+    projects?: Array<{ id: string; name: string }>;
+    users?: Array<{ id: string; name: string; email: string }>;
   } = {
     startTimer: async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry,
     stopTimer: async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry,
@@ -75,9 +80,9 @@ function createFakeService() {
       getProjects: async () => {
         state.listLoads = (state.listLoads ?? 0) + 1;
         await state.beforeLists?.();
-        return [];
+        return state.projects ?? [];
       },
-      getUsers: async () => [],
+      getUsers: async () => state.users ?? [],
       getContacts: async () => [],
       startTimer: async () => {
         state.startCount++;
@@ -365,7 +370,8 @@ test('auto-stop stops the entry with the global key', async () => {
 
 test('a timer started while the administration lists load is kept, and the change refused', async () => {
   const { fake, service, tracker, notices } = setup({ ...configured });
-  // The key is pressed while Moneybird answers the projects request.
+  // Simulates a timer starting while Moneybird answers the projects request. Key presses
+  // queue behind the change, so this guards the handler's own re-check.
   service.state.beforeLists = async () => {
     await fake.action.setSettings({
       ...fake.current(),
@@ -503,7 +509,7 @@ test('an administration change is refused while the timer runs, and the administ
   assert.deepEqual(notices, [
     {
       event: 'administrationRejected',
-      actionId: 'instance-1',
+      actionId: fake.action.id,
       message: 'Stop the running timer first to change the administration',
     },
   ]);
@@ -665,4 +671,51 @@ test('an auto-stop that fires during an API key change waits for it and stops wi
   assert.equal(service.stopCalls.length, 1);
   assert.equal(service.stopCalls[0]?.apiKey, 'own-2');
   assert.equal(fake.current().isRunning, false);
+});
+
+test('a press that waits behind a slow list load records the moment of the press', async () => {
+  const start = new Date(Date.now() - 60_000);
+  const { fake, service, tracker, keyDown } = setup(
+    runningSince(start, { timerAdministrationId: '1' })
+  );
+  service.state.administrations = [{ id: '1', name: 'Main' }];
+  service.state.administrationsDelayMs = 60;
+
+  const load = tracker.onSendToPlugin({
+    action: fake.action,
+    payload: { event: 'loadAdministrations' },
+  } as unknown as SendToPluginEvent<{ event: 'loadAdministrations' }, TimerSettings>);
+  const pressedAt = Date.now();
+  await Promise.all([load, keyDown()]);
+
+  // The stop waited about 60 ms for the load, but ends the entry when the key was pressed.
+  const endedAt = service.stopCalls[0]?.endedAt.getTime() ?? 0;
+  assert.ok(
+    endedAt >= pressedAt && endedAt < pressedAt + 30,
+    `ended ${endedAt - pressedAt} ms late`
+  );
+  assert.equal(fake.current().isRunning, false);
+});
+
+test('a start that waits behind a slow list load records the moment of the press', async () => {
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  // The load keeps the key's administration, project and user, so the press can start.
+  service.state.administrations = [{ id: '1', name: 'Main' }];
+  service.state.projects = [{ id: '2', name: 'Project' }];
+  service.state.users = [{ id: '3', name: 'Me', email: 'me@example.com' }];
+  service.state.administrationsDelayMs = 60;
+
+  const load = tracker.onSendToPlugin({
+    action: fake.action,
+    payload: { event: 'loadAdministrations' },
+  } as unknown as SendToPluginEvent<{ event: 'loadAdministrations' }, TimerSettings>);
+  const pressedAt = Date.now();
+  await Promise.all([load, keyDown()]);
+
+  const startedAt = new Date(fake.current().startTime ?? 0).getTime();
+  assert.equal(fake.current().isRunning, true);
+  assert.ok(
+    startedAt >= pressedAt && startedAt < pressedAt + 30,
+    `started ${startedAt - pressedAt} ms late`
+  );
 });
