@@ -112,6 +112,7 @@ account.
 - Key shows elapsed time while running (`42s`, `17m`, `1h05`)
 - If stopping fails, the timer keeps running so the next press can retry
 - Auto-stop ends the entry at the configured limit, also when the computer was asleep
+- While a timer runs, the key's administration cannot be changed; the entry is always stopped in the administration it was started in
 
 `Invoice Creator`
 - Single press: create invoice for current selection

@@ -49,26 +49,30 @@ function createFakeAction(initial: TimerSettings) {
 function createFakeService() {
   const stopCalls: StopCall[] = [];
   const usedApiKeys: string[] = [];
+  const usedAdministrationIds: Array<string | undefined> = [];
   const state: {
     startTimer: () => Promise<MoneybirdTimeEntry>;
     stopTimer: () => Promise<MoneybirdTimeEntry>;
     startCount: number;
     beforeLists?: () => Promise<void>;
     administrationsDelayMs?: number;
+    listLoads?: number;
   } = {
     startTimer: async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry,
     stopTimer: async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry,
     startCount: 0,
   };
 
-  const factory: CreateTimerService = apiKey => {
+  const factory: CreateTimerService = (apiKey, administrationId) => {
     usedApiKeys.push(apiKey);
+    usedAdministrationIds.push(administrationId);
     return {
       getAdministrations: async () => {
         await new Promise(resolve => setTimeout(resolve, state.administrationsDelayMs ?? 0));
         return [];
       },
       getProjects: async () => {
+        state.listLoads = (state.listLoads ?? 0) + 1;
         await state.beforeLists?.();
         return [];
       },
@@ -85,7 +89,7 @@ function createFakeService() {
     };
   };
 
-  return { factory, state, stopCalls, usedApiKeys };
+  return { factory, state, stopCalls, usedApiKeys, usedAdministrationIds };
 }
 
 const configured: TimerSettings = {
@@ -126,7 +130,10 @@ function setup(settings: TimerSettings, globalSettings: PluginGlobalSettings = {
   const fake = createFakeAction(settings);
   const service = createFakeService();
   const global = createGlobalStore(globalSettings);
-  const tracker = new TimeTracker(service.factory, global.store);
+  const notices: unknown[] = [];
+  const tracker = new TimeTracker(service.factory, global.store, async message => {
+    notices.push(message);
+  });
   trackers.push({ tracker, action: fake.action });
 
   const keyDown = () =>
@@ -135,7 +142,7 @@ function setup(settings: TimerSettings, globalSettings: PluginGlobalSettings = {
       payload: { settings: fake.current() },
     } as unknown as KeyDownEvent<TimerSettings>);
 
-  return { fake, service, tracker, keyDown, global };
+  return { fake, service, tracker, keyDown, global, notices };
 }
 
 afterEach(async () => {
@@ -355,8 +362,8 @@ test('auto-stop stops the entry with the global key', async () => {
   assert.deepEqual(service.usedApiKeys, ['global-key']);
 });
 
-test('a timer started while the administration lists load is kept', async () => {
-  const { fake, service, tracker } = setup({ ...configured });
+test('a timer started while the administration lists load is kept, and the change refused', async () => {
+  const { fake, service, tracker, notices } = setup({ ...configured });
   // The key is pressed while Moneybird answers the projects request.
   service.state.beforeLists = async () => {
     await fake.action.setSettings({
@@ -364,6 +371,7 @@ test('a timer started while the administration lists load is kept', async () => 
       isRunning: true,
       startTime: '2026-11-22T10:00:00.000Z',
       timeEntryId: 'entry-7',
+      timerAdministrationId: '1',
     });
   };
 
@@ -372,10 +380,16 @@ test('a timer started while the administration lists load is kept', async () => 
     payload: { event: 'administrationSelected', administrationId: '9' },
   } as unknown as SendToPluginEvent<{ event: 'administrationSelected' }, TimerSettings>);
 
-  assert.equal(fake.current().administrationId, '9');
-  assert.deepEqual(fake.current().projects, {});
+  // The timer started while the lists loaded, so the change is refused after all: the key
+  // keeps its administration and selections (#205).
   assert.equal(fake.current().isRunning, true);
   assert.equal(fake.current().timeEntryId, 'entry-7');
+  assert.equal(fake.current().timerAdministrationId, '1');
+  assert.equal(fake.current().administrationId, '1');
+  assert.equal(fake.current().projectId, '2');
+  assert.equal(fake.current().userId, '3');
+  assert.equal(fake.current().projects, undefined);
+  assert.equal(notices.length, 1);
 });
 
 test('an administration change sent after a slower list load is applied last', async () => {
@@ -394,4 +408,116 @@ test('an administration change sent after a slower list load is applied last', a
   ]);
 
   assert.equal(fake.current().administrationId, '9');
+});
+
+const sendAdministration = (tracker: TimeTracker, action: unknown, administrationId: string) =>
+  tracker.onSendToPlugin({
+    action,
+    payload: { event: 'administrationSelected', administrationId },
+  } as unknown as SendToPluginEvent<{ event: 'administrationSelected' }, TimerSettings>);
+
+test('starting a timer pins the administration its entry lives in, stopping releases it', async () => {
+  const { fake, keyDown } = setup({ ...configured });
+
+  await keyDown();
+  assert.equal(fake.current().timerAdministrationId, '1');
+
+  await keyDown();
+  assert.equal(fake.current().isRunning, false);
+  assert.equal(fake.current().timerAdministrationId, undefined);
+});
+
+test('a running timer is stopped in its own administration, even after the key changed', async () => {
+  const start = new Date(Date.now() - 60_000);
+  const { service, keyDown } = setup(
+    runningSince(start, { administrationId: '9', timerAdministrationId: '1' })
+  );
+
+  await keyDown();
+
+  assert.equal(service.stopCalls.length, 1);
+  assert.deepEqual(service.usedAdministrationIds, ['1']);
+});
+
+test('a running timer can be stopped without a project or user selected', async () => {
+  const start = new Date(Date.now() - 60_000);
+  const { fake, service, keyDown } = setup(runningSince(start, { projectId: '', userId: '' }));
+
+  await keyDown();
+
+  assert.equal(service.stopCalls.length, 1);
+  assert.equal(service.stopCalls[0]?.timeEntryId, 'entry-1');
+  assert.equal(fake.current().isRunning, false);
+  assert.ok(!fake.titles.includes('Config needed'));
+});
+
+test('a timer started before this version is stopped in the key administration', async () => {
+  const start = new Date(Date.now() - 60_000);
+  const { service, keyDown } = setup(runningSince(start));
+
+  await keyDown();
+
+  assert.deepEqual(service.usedAdministrationIds, ['1']);
+});
+
+test('auto-stop stops the entry in its own administration', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const start = new Date(Date.now() - 5 * HOUR_MS);
+  const { fake, service, tracker } = setup(
+    runningSince(start, {
+      administrationId: '9',
+      timerAdministrationId: '1',
+      autoStopEnabled: true,
+      autoStopHours: 4,
+    })
+  );
+
+  await tracker.onWillAppear({
+    action: fake.action,
+    payload: { settings: fake.current() },
+  } as unknown as WillAppearEvent<TimerSettings>);
+  mock.timers.tick(1_000);
+  await flushPromises();
+
+  assert.equal(service.stopCalls.length, 1);
+  assert.deepEqual(service.usedAdministrationIds, ['1']);
+});
+
+test('an administration change is refused while the timer runs, and the administration restored', async () => {
+  const start = new Date(Date.now() - 60_000);
+  const { fake, service, tracker, notices, global } = setup(
+    runningSince(start, { timerAdministrationId: '1' })
+  );
+  // The property inspector already saved the new administration before it told the plugin.
+  await fake.action.setSettings({ ...fake.current(), administrationId: '9' });
+
+  await sendAdministration(tracker, fake.action, '9');
+
+  assert.equal(service.state.listLoads ?? 0, 0);
+  assert.equal(fake.current().administrationId, '1');
+  assert.equal(fake.current().projectId, '2');
+  assert.equal(fake.current().userId, '3');
+  assert.equal(fake.current().isRunning, true);
+  assert.equal(global.stored().defaultAdministrationId, undefined);
+  assert.deepEqual(notices, [
+    {
+      event: 'administrationRejected',
+      actionId: 'instance-1',
+      message: 'Stop the running timer first to change the administration',
+    },
+  ]);
+});
+
+test('picking the timer administration again while it runs changes nothing', async () => {
+  const start = new Date(Date.now() - 60_000);
+  const { fake, service, tracker, notices } = setup(
+    runningSince(start, { timerAdministrationId: '1' })
+  );
+  const before = fake.savedSettings.length;
+
+  await sendAdministration(tracker, fake.action, '1');
+
+  assert.equal(service.state.listLoads ?? 0, 0);
+  assert.equal(fake.savedSettings.length, before);
+  assert.deepEqual(notices, []);
 });
