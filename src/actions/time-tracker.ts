@@ -149,6 +149,15 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   private syncSoonTimeout: NodeJS.Timeout | undefined;
   private syncRun: Promise<void> | undefined;
   private syncAgain = false;
+  /**
+   * Starts whose outcome stayed unknown (no answer, and the entry not found right away),
+   * per key: if the sync finds that entry later, it is the key's own timer, not one
+   * picked up from elsewhere, so it keeps auto-stop.
+   */
+  private unconfirmedStarts: Map<
+    string,
+    { startedAt: number; projectId: string; description: string }
+  > = new Map();
 
   constructor(
     private readonly createService: CreateTimerService = createMoneybirdService,
@@ -543,16 +552,37 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       // An error flash from an earlier press would otherwise redraw the key as idle.
       clearTimeoutForKey(this.displayResetTimeouts, action.id);
 
+      const unconfirmed = this.unconfirmedStarts.get(action.id);
+      const startedByThisKey =
+        unconfirmed !== undefined &&
+        new Date(entry.started_at).getTime() === unconfirmed.startedAt &&
+        entry.project_id === unconfirmed.projectId &&
+        entry.description === unconfirmed.description;
+      this.unconfirmedStarts.delete(action.id);
+
       const timerState = {
         isRunning: true,
         startTime: new Date(entry.started_at).toISOString(),
         timeEntryId: entry.id,
         timerAdministrationId: administrationId,
-        timerPickedUp: true,
+        ...(startedByThisKey ? {} : { timerPickedUp: true }),
       };
-      await writePatch(action, { values: timerState });
-      streamDeck.logger.info(`Key ${action.id} picked up timer ${entry.id} started elsewhere`);
-      await this.showRunning(action, { ...latest, ...timerState });
+      await writePatch(action, {
+        values: timerState,
+        remove: startedByThisKey ? ['timerPickedUp'] : [],
+      });
+      streamDeck.logger.info(
+        startedByThisKey
+          ? `Key ${action.id} found its unconfirmed start ${entry.id}`
+          : `Key ${action.id} picked up timer ${entry.id} started elsewhere`
+      );
+      // The display gets the same mark as the stored settings, so a leftover one from
+      // `latest` cannot switch off the auto-stop of the key's own start.
+      await this.showRunning(action, {
+        ...latest,
+        ...timerState,
+        timerPickedUp: startedByThisKey ? undefined : true,
+      });
     });
   }
 
@@ -632,7 +662,14 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         : await this.findUnansweredStart(action, moneybirdService, settings, startedAt);
       if (!timeEntry) {
         // Nothing was stored, so the key simply stays idle. If Moneybird did create the
-        // entry after all, the next sync with Moneybird picks it up.
+        // entry after all, the next sync with Moneybird picks it up, as this key's own.
+        if (!isRejectedByMoneybird(error)) {
+          this.unconfirmedStarts.set(instanceId, {
+            startedAt: Math.floor(startedAt.getTime() / MS_PER_MINUTE) * MS_PER_MINUTE,
+            projectId: settings.projectId,
+            description: settings.description || DEFAULT_TIME_ENTRY_DESCRIPTION,
+          });
+        }
         await this.flashError(action, () => this.showIdle(action, settings));
         return;
       }
@@ -640,6 +677,10 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         `Start for ${instanceId} got no answer; found entry ${timeEntry.id} in Moneybird`
       );
     }
+
+    // This press got its entry, so an earlier start the key could not confirm is no longer
+    // the key's last start: an entry from it that turns up later is treated as picked up.
+    this.unconfirmedStarts.delete(instanceId);
 
     try {
       const timerState = {
