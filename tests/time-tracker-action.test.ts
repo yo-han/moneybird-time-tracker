@@ -17,7 +17,9 @@ import type {
 
 const HOUR_MS = 60 * 60 * 1000;
 
-type StopCall = { timeEntryId: string; endedAt: Date };
+type StopCall = { timeEntryId: string; endedAt: Date; apiKey: string };
+
+let fakeActionCount = 0;
 
 function createFakeAction(initial: TimerSettings) {
   let settings = initial;
@@ -29,7 +31,8 @@ function createFakeAction(initial: TimerSettings) {
     savedSettings,
     current: () => settings,
     action: {
-      id: 'instance-1',
+      // Unique per test: the settings queue is shared by key id across the whole file.
+      id: `instance-${++fakeActionCount}`,
       isKey: () => true,
       async setTitle(title: string) {
         titles.push(title);
@@ -57,6 +60,9 @@ function createFakeService() {
     beforeLists?: () => Promise<void>;
     administrationsDelayMs?: number;
     listLoads?: number;
+    administrations?: Array<{ id: string; name: string }>;
+    projects?: Array<{ id: string; name: string }>;
+    users?: Array<{ id: string; name: string; email: string }>;
   } = {
     startTimer: async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry,
     stopTimer: async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry,
@@ -69,21 +75,21 @@ function createFakeService() {
     return {
       getAdministrations: async () => {
         await new Promise(resolve => setTimeout(resolve, state.administrationsDelayMs ?? 0));
-        return [];
+        return state.administrations ?? [];
       },
       getProjects: async () => {
         state.listLoads = (state.listLoads ?? 0) + 1;
         await state.beforeLists?.();
-        return [];
+        return state.projects ?? [];
       },
-      getUsers: async () => [],
+      getUsers: async () => state.users ?? [],
       getContacts: async () => [],
       startTimer: async () => {
         state.startCount++;
         return state.startTimer();
       },
       stopTimer: async (timeEntryId: string, endedAt: Date = new Date()) => {
-        stopCalls.push({ timeEntryId, endedAt });
+        stopCalls.push({ timeEntryId, endedAt, apiKey });
         return state.stopTimer();
       },
     };
@@ -364,7 +370,8 @@ test('auto-stop stops the entry with the global key', async () => {
 
 test('a timer started while the administration lists load is kept, and the change refused', async () => {
   const { fake, service, tracker, notices } = setup({ ...configured });
-  // The key is pressed while Moneybird answers the projects request.
+  // Simulates a timer starting while Moneybird answers the projects request. Key presses
+  // queue behind the change, so this guards the handler's own re-check.
   service.state.beforeLists = async () => {
     await fake.action.setSettings({
       ...fake.current(),
@@ -502,7 +509,7 @@ test('an administration change is refused while the timer runs, and the administ
   assert.deepEqual(notices, [
     {
       event: 'administrationRejected',
-      actionId: 'instance-1',
+      actionId: fake.action.id,
       message: 'Stop the running timer first to change the administration',
     },
   ]);
@@ -520,4 +527,195 @@ test('picking the timer administration again while it runs changes nothing', asy
   assert.equal(service.state.listLoads ?? 0, 0);
   assert.equal(fake.savedSettings.length, before);
   assert.deepEqual(notices, []);
+});
+
+/** Simulates the property inspector saving fields while a Moneybird request is in flight. */
+const saveMeanwhile = (fake: ReturnType<typeof createFakeAction>) =>
+  fake.action.setSettings({
+    ...fake.current(),
+    description: 'typed meanwhile',
+    projects: { p9: { id: 'p9', name: 'Loaded meanwhile' } },
+  });
+
+test('fields saved while the start request is in flight are kept', async () => {
+  const { fake, service, keyDown } = setup({ ...configured });
+  service.state.startTimer = async () => {
+    await saveMeanwhile(fake);
+    return { id: 'entry-1' } as MoneybirdTimeEntry;
+  };
+
+  await keyDown();
+
+  assert.equal(fake.current().isRunning, true);
+  assert.equal(fake.current().timeEntryId, 'entry-1');
+  assert.equal(fake.current().timerAdministrationId, '1');
+  assert.equal(fake.current().description, 'typed meanwhile');
+  assert.deepEqual(Object.keys(fake.current().projects ?? {}), ['p9']);
+});
+
+test('fields saved while the stop request is in flight are kept', async () => {
+  const start = new Date(Date.now() - 60_000);
+  const { fake, service, keyDown } = setup(runningSince(start, { timerAdministrationId: '1' }));
+  service.state.stopTimer = async () => {
+    await saveMeanwhile(fake);
+    return { id: 'entry-1' } as MoneybirdTimeEntry;
+  };
+
+  await keyDown();
+
+  assert.equal(fake.current().isRunning, false);
+  assert.equal('timeEntryId' in fake.current(), false);
+  assert.equal('startTime' in fake.current(), false);
+  assert.equal('timerAdministrationId' in fake.current(), false);
+  assert.equal(fake.current().description, 'typed meanwhile');
+  assert.deepEqual(Object.keys(fake.current().projects ?? {}), ['p9']);
+});
+
+test('fields saved while an auto-stop request is in flight are kept', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const start = new Date(Date.now() - 5 * HOUR_MS);
+  const { fake, service, tracker } = setup(
+    runningSince(start, { autoStopEnabled: true, autoStopHours: 4 })
+  );
+  service.state.stopTimer = async () => {
+    await saveMeanwhile(fake);
+    return { id: 'entry-1' } as MoneybirdTimeEntry;
+  };
+
+  await tracker.onWillAppear({
+    action: fake.action,
+    payload: { settings: fake.current() },
+  } as unknown as WillAppearEvent<TimerSettings>);
+  mock.timers.tick(1_000);
+  await flushPromises();
+
+  assert.equal(service.stopCalls.length, 1);
+  assert.equal(fake.current().isRunning, false);
+  assert.equal(fake.current().description, 'typed meanwhile');
+});
+
+const slowStart = (service: ReturnType<typeof createFakeService>) => {
+  service.state.startTimer = async () => {
+    await new Promise(resolve => setTimeout(resolve, 30));
+    return { id: 'entry-1' } as MoneybirdTimeEntry;
+  };
+};
+
+test('a key press right after an administration change waits for it, so no mismatched timer starts', async () => {
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  slowStart(service);
+
+  // The property inspector sends the change, then the key is pressed.
+  const change = sendAdministration(tracker, fake.action, '9');
+  const press = keyDown();
+  await Promise.all([change, press]);
+
+  // The change cleared the project, so the key needs configuration instead of starting a
+  // timer in administration 1 while it shows 9.
+  assert.equal(service.state.startCount, 0);
+  assert.equal(fake.current().administrationId, '9');
+  assert.equal(fake.current().isRunning, undefined);
+  assert.equal(fake.titles.at(-1), 'Config needed');
+});
+
+test('a key press right after an own API key change waits for it', async () => {
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  slowStart(service);
+  service.state.administrationsDelayMs = 10;
+
+  const change = tracker.onSendToPlugin({
+    action: fake.action,
+    payload: { event: 'apiKeyChanged', scope: 'key', apiKey: 'other-account-key' },
+  } as unknown as SendToPluginEvent<{ event: 'apiKeyChanged' }, TimerSettings>);
+  const press = keyDown();
+  await Promise.all([change, press]);
+
+  // The new key cannot open administration 1 (the fake returns none), so the key was
+  // cleared before the press was handled: no timer runs behind a key that cannot stop it.
+  assert.equal(service.state.startCount, 0);
+  assert.equal(fake.current().apiKey, 'other-account-key');
+  assert.equal(fake.current().isRunning, undefined);
+});
+
+test('an auto-stop that fires during an API key change waits for it and stops with the new key', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const start = new Date(Date.now() - 5 * HOUR_MS);
+  const { fake, service, tracker } = setup(
+    runningSince(start, { timerAdministrationId: '1', autoStopEnabled: true, autoStopHours: 4 })
+  );
+  // The new own key can open the timer's administration, but loading takes 2 s.
+  service.state.administrations = [{ id: '1', name: 'Main' }];
+  service.state.administrationsDelayMs = 2_000;
+
+  await tracker.onWillAppear({
+    action: fake.action,
+    payload: { settings: fake.current() },
+  } as unknown as WillAppearEvent<TimerSettings>);
+  const change = tracker.onSendToPlugin({
+    action: fake.action,
+    payload: { event: 'apiKeyChanged', scope: 'key', apiKey: 'own-2' },
+  } as unknown as SendToPluginEvent<{ event: 'apiKeyChanged' }, TimerSettings>);
+  // Let the key change reach its (mocked) 2 s administrations request.
+  await flushPromises();
+
+  // Auto-stop is due after 1 s, while the key change is still loading.
+  mock.timers.tick(1_000);
+  await flushPromises();
+  assert.equal(service.stopCalls.length, 0);
+
+  mock.timers.tick(1_000);
+  await flushPromises();
+  await change;
+  await flushPromises();
+
+  assert.equal(service.stopCalls.length, 1);
+  assert.equal(service.stopCalls[0]?.apiKey, 'own-2');
+  assert.equal(fake.current().isRunning, false);
+});
+
+test('a press that waits behind a slow list load records the moment of the press', async () => {
+  const start = new Date(Date.now() - 60_000);
+  const { fake, service, tracker, keyDown } = setup(
+    runningSince(start, { timerAdministrationId: '1' })
+  );
+  service.state.administrations = [{ id: '1', name: 'Main' }];
+  service.state.administrationsDelayMs = 60;
+
+  const load = tracker.onSendToPlugin({
+    action: fake.action,
+    payload: { event: 'loadAdministrations' },
+  } as unknown as SendToPluginEvent<{ event: 'loadAdministrations' }, TimerSettings>);
+  const pressedAt = Date.now();
+  await Promise.all([load, keyDown()]);
+
+  // The stop waited about 60 ms for the load, but ends the entry when the key was pressed.
+  const endedAt = service.stopCalls[0]?.endedAt.getTime() ?? 0;
+  assert.ok(
+    endedAt >= pressedAt && endedAt < pressedAt + 30,
+    `ended ${endedAt - pressedAt} ms late`
+  );
+  assert.equal(fake.current().isRunning, false);
+});
+
+test('a start that waits behind a slow list load records the moment of the press', async () => {
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  // The load keeps the key's administration, project and user, so the press can start.
+  service.state.administrations = [{ id: '1', name: 'Main' }];
+  service.state.projects = [{ id: '2', name: 'Project' }];
+  service.state.users = [{ id: '3', name: 'Me', email: 'me@example.com' }];
+  service.state.administrationsDelayMs = 60;
+
+  const load = tracker.onSendToPlugin({
+    action: fake.action,
+    payload: { event: 'loadAdministrations' },
+  } as unknown as SendToPluginEvent<{ event: 'loadAdministrations' }, TimerSettings>);
+  const pressedAt = Date.now();
+  await Promise.all([load, keyDown()]);
+
+  const startedAt = new Date(fake.current().startTime ?? 0).getTime();
+  assert.equal(fake.current().isRunning, true);
+  assert.ok(
+    startedAt >= pressedAt && startedAt < pressedAt + 30,
+    `started ${startedAt - pressedAt} ms late`
+  );
 });

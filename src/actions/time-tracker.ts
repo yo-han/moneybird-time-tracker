@@ -41,7 +41,12 @@ import {
   type DependentList,
 } from '../utils/api-key-settings.js';
 import { migrateKeyCredentials, resolveApiKeyFromStore } from '../utils/credentials.js';
-import { runInOrder, writePatch, type SettingsAction } from '../utils/settings-writes.js';
+import {
+  runInOrder,
+  writePatch,
+  type SettingsAction,
+  type SettingsPatch,
+} from '../utils/settings-writes.js';
 import { timerAdministrationOf } from '../utils/running-timer.js';
 import type { GlobalSettingsStore } from '../utils/global-settings.js';
 import { notifyPropertyInspector, pluginGlobalSettings } from '../utils/plugin-global-settings.js';
@@ -89,15 +94,14 @@ const TIMER_LISTS: DependentList[] = [
   },
 ];
 
-function clearedTimerState(settings: TimerSettings): TimerSettings {
-  return {
-    ...settings,
-    isRunning: false,
-    startTime: undefined,
-    timeEntryId: undefined,
-    timerAdministrationId: undefined,
-  };
-}
+/**
+ * Ends the timer state of a key. Only these fields are written, onto the settings as they
+ * are at that moment: anything saved while the stop request was in flight is kept.
+ */
+const IDLE_TIMER_PATCH: SettingsPatch = {
+  values: { isRunning: false },
+  remove: ['startTime', 'timeEntryId', 'timerAdministrationId'],
+};
 
 const ADMINISTRATION_LOCKED_MESSAGE = 'Stop the running timer first to change the administration';
 
@@ -216,8 +220,8 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         `Fetched ${rawProjects.length} projects, ${rawUsers.length} users and ${rawContacts.length} contacts for administration ${administrationId}`
       );
 
-      // The key may have been pressed while the lists loaded: a timer that started
-      // meanwhile keeps its administration and selections too.
+      // Defence in depth: key presses run in the same queue, so a timer cannot normally
+      // start while the lists load. If one did, it keeps its administration and selections.
       const latestSettings = await ev.action.getSettings();
       if (latestSettings.isRunning) {
         await this.refuseAdministrationChange(ev.action, latestSettings, administrationId);
@@ -304,9 +308,15 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
   override async onKeyDown(ev: KeyDownEvent<TimerSettings>): Promise<void> {
     const instanceId = ev.action.id;
+    // The press may wait in the queue below; the entry starts or ends when the key was
+    // pressed, not when its turn comes.
+    const pressedAt = new Date();
 
+    // runExclusivePerKey drops a double press. runInOrder puts the press in the key's queue
+    // with the property inspector's messages, so a start or stop never overlaps an API key
+    // or administration change, and both decide on the same, current settings.
     const handled = await runExclusivePerKey(this.requestsInFlight, instanceId, () =>
-      this.toggleTimer(ev.action, ev.payload.settings)
+      runInOrder(instanceId, () => this.toggleTimer(ev.action, pressedAt))
     );
 
     if (!handled) {
@@ -314,7 +324,9 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     }
   }
 
-  private async toggleTimer(action: TimerKeyAction, settings: TimerSettings): Promise<void> {
+  private async toggleTimer(action: TimerKeyAction, pressedAt: Date): Promise<void> {
+    // Read now, not from the key press: an earlier message in the queue may have changed them.
+    const settings = await action.getSettings();
     const apiKey = await this.resolveApiKey(settings);
 
     if (settings.isRunning) {
@@ -326,7 +338,12 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         await setConfigNeededDisplay(action, this.getImagePath('default'));
         return;
       }
-      await this.stopTimer(action, settings, this.createService(apiKey, timerAdministrationId));
+      await this.stopTimer(
+        action,
+        settings,
+        this.createService(apiKey, timerAdministrationId),
+        pressedAt
+      );
       return;
     }
 
@@ -336,30 +353,36 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       return;
     }
 
-    await this.startTimer(action, settings, this.createService(apiKey, settings.administrationId));
+    await this.startTimer(
+      action,
+      settings,
+      this.createService(apiKey, settings.administrationId),
+      pressedAt
+    );
   }
 
   private async startTimer(
     action: TimerKeyAction,
     settings: TimerSettings,
-    moneybirdService: TimerService
+    moneybirdService: TimerService,
+    startedAt: Date
   ): Promise<void> {
     const instanceId = action.id;
 
     try {
-      const startedAt = new Date();
       const timeEntry = await moneybirdService.startTimer(settings, startedAt);
 
-      const runningSettings: TimerSettings = {
-        ...settings,
+      const timerState = {
         isRunning: true,
         startTime: startedAt.toISOString(),
         timeEntryId: timeEntry.id,
         timerAdministrationId: settings.administrationId,
       };
 
-      await action.setSettings(runningSettings);
-      await this.showRunning(action, runningSettings);
+      // Only the timer fields are written, onto the settings as they are now: anything
+      // saved while the start request was in flight is kept.
+      await writePatch(action, { values: timerState });
+      await this.showRunning(action, { ...settings, ...timerState });
       streamDeck.logger.debug(`Timer started for instance ${instanceId}`);
     } catch (error: unknown) {
       // Nothing was stored yet, so the key simply stays idle.
@@ -371,7 +394,8 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   private async stopTimer(
     action: TimerKeyAction,
     settings: TimerSettings,
-    moneybirdService: TimerService
+    moneybirdService: TimerService,
+    pressedAt: Date
   ): Promise<void> {
     const instanceId = action.id;
 
@@ -382,7 +406,10 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     }
 
     try {
-      await moneybirdService.stopTimer(settings.timeEntryId, this.resolveStopTime(settings));
+      await moneybirdService.stopTimer(
+        settings.timeEntryId,
+        this.resolveStopTime(settings, pressedAt)
+      );
       await this.resetToIdle(action, settings);
       streamDeck.logger.debug(`Timer stopped for instance ${instanceId}`);
     } catch (error: unknown) {
@@ -409,7 +436,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
   private async resetToIdle(action: TimerKeyAction, settings: TimerSettings): Promise<void> {
     this.clearInstanceRuntime(action.id);
-    await action.setSettings(clearedTimerState(settings));
+    await writePatch(action, IDLE_TIMER_PATCH);
     await this.showIdle(action, settings);
   }
 
@@ -420,17 +447,17 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
   /**
    * Ends a manual stop at the auto-stop limit when that has already passed, e.g. because
-   * the machine slept through the auto-stop timeout; otherwise now.
+   * the machine slept through the auto-stop timeout; otherwise when the key was pressed.
    */
-  private resolveStopTime(settings: TimerSettings): Date {
+  private resolveStopTime(settings: TimerSettings, pressedAt: Date): Date {
     const autoStopHours = settings.autoStopEnabled
       ? normalizeAutoStopHours(settings.autoStopHours)
       : null;
 
     if (autoStopHours === null || !settings.startTime) {
-      return new Date();
+      return pressedAt;
     }
-    return resolveAutoStopEndTime(settings.startTime, autoStopHours);
+    return resolveAutoStopEndTime(settings.startTime, autoStopHours, pressedAt);
   }
 
   /**
@@ -518,7 +545,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     const timeout = setTimeout(() => {
       this.autoStopTimeouts.delete(instanceId);
       runExclusivePerKey(this.requestsInFlight, instanceId, () =>
-        this.autoStop(action, autoStopHours)
+        runInOrder(instanceId, () => this.autoStop(action, autoStopHours))
       ).catch(error =>
         logError(streamDeck.logger, 'Error during auto-stop', error, { instanceId })
       );
