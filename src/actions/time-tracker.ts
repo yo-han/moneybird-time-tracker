@@ -10,13 +10,7 @@ import streamDeck, {
 } from '@elgato/streamdeck';
 import { MoneybirdService } from '../services/moneybird.js';
 import { isPermanentRequestError } from '../services/moneybird/error-handler.js';
-import {
-  TimerSettings,
-  projectToJson,
-  administrationToJson,
-  userToJson,
-  contactToJson,
-} from '../types/moneybird.js';
+import { TimerSettings, projectToJson, userToJson, contactToJson } from '../types/moneybird.js';
 import path from 'path';
 import {
   calculateRemainingAutoStopHours,
@@ -34,12 +28,15 @@ import { logError } from '../utils/error-logging.js';
 import { isKeyActionEvent } from '../utils/key-action.js';
 import { formatElapsedTime } from '../utils/elapsed-time.js';
 import { runExclusivePerKey } from '../utils/in-flight.js';
-
-type TimerPluginPayload = {
-  event?: 'setGlobalSettings' | 'administrationSelected';
-  apiKey?: string;
-  administrationId?: string;
-};
+import {
+  applyApiKeyEvent,
+  rememberDefaultAdministration,
+  type ApiKeyEventPayload,
+  type DependentList,
+} from '../utils/api-key-settings.js';
+import { migrateKeyCredentials, resolveApiKey } from '../utils/credentials.js';
+import type { GlobalSettingsStore } from '../utils/global-settings.js';
+import { notifyPropertyInspector, pluginGlobalSettings } from '../utils/plugin-global-settings.js';
 
 type TimerKeyAction = KeyAction<TimerSettings>;
 
@@ -62,6 +59,28 @@ const AUTO_STOP_WARNING_MINUTES = 5;
 /** Lower bound for the auto-stop delay of a timer whose limit already passed. */
 const MIN_AUTO_STOP_DELAY_MS = 1000;
 
+/** The lists in the timer's property inspector that depend on the administration. */
+const TIMER_LISTS: DependentList[] = [
+  {
+    list: 'projects',
+    selection: 'projectId',
+    fetch: async service =>
+      Object.fromEntries((await service.getProjects()).map(p => [p.id, projectToJson(p)])),
+  },
+  {
+    list: 'users',
+    selection: 'userId',
+    fetch: async service =>
+      Object.fromEntries((await service.getUsers()).map(u => [u.id, userToJson(u)])),
+  },
+  {
+    list: 'contacts',
+    selection: 'contactId',
+    fetch: async service =>
+      Object.fromEntries((await service.getContacts()).map(c => [c.id, contactToJson(c)])),
+  },
+];
+
 function clearedTimerState(settings: TimerSettings): TimerSettings {
   return {
     ...settings,
@@ -78,8 +97,15 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   private displayResetTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private requestsInFlight: Set<string> = new Set();
 
-  constructor(private readonly createService: CreateTimerService = createMoneybirdService) {
+  constructor(
+    private readonly createService: CreateTimerService = createMoneybirdService,
+    private readonly globalSettings: GlobalSettingsStore = pluginGlobalSettings
+  ) {
     super();
+  }
+
+  private async resolveApiKey(settings: TimerSettings): Promise<string | undefined> {
+    return resolveApiKey(settings, await this.globalSettings.get());
   }
 
   private getImagePath(type: 'default' | 'active' | 'error'): string {
@@ -111,16 +137,23 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   }
 
   override async onSendToPlugin(
-    ev: SendToPluginEvent<TimerPluginPayload, TimerSettings>
+    ev: SendToPluginEvent<ApiKeyEventPayload, TimerSettings>
   ): Promise<void> {
     try {
       streamDeck.logger.debug(
         `Plugin received SendToPlugin event: ${ev.payload?.event || 'unknown'}`
       );
 
-      if (ev.payload?.event === 'setGlobalSettings') {
-        await this.handleGlobalSettings(ev);
-      } else if (ev.payload?.event === 'administrationSelected') {
+      const event = ev.payload?.event;
+      if (event === 'apiKeyChanged' || event === 'loadAdministrations') {
+        await applyApiKeyEvent(ev.action, ev.payload, {
+          store: this.globalSettings,
+          logger: streamDeck.logger,
+          dependents: TIMER_LISTS,
+          notify: notifyPropertyInspector,
+          createService: this.createService,
+        });
+      } else if (event === 'administrationSelected') {
         await this.handleAdministrationChange(ev);
       }
     } catch (error) {
@@ -129,18 +162,21 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   }
 
   private async handleAdministrationChange(
-    ev: SendToPluginEvent<TimerPluginPayload, TimerSettings>
+    ev: SendToPluginEvent<ApiKeyEventPayload, TimerSettings>
   ): Promise<void> {
     const { administrationId } = ev.payload;
     const currentSettings = await ev.action.getSettings();
+    const apiKey = await this.resolveApiKey(currentSettings);
 
-    if (!currentSettings.apiKey || !administrationId) {
+    if (!apiKey || !administrationId) {
       streamDeck.logger.debug('Missing apiKey or administrationId, aborting');
       return;
     }
 
+    await rememberDefaultAdministration(this.globalSettings, administrationId, streamDeck.logger);
+
     try {
-      const moneybirdService = this.createService(currentSettings.apiKey, administrationId);
+      const moneybirdService = this.createService(apiKey, administrationId);
 
       const [rawProjects, rawUsers, rawContacts] = await Promise.all([
         moneybirdService.getProjects(),
@@ -173,50 +209,18 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     }
   }
 
-  private async handleGlobalSettings(
-    ev: SendToPluginEvent<TimerPluginPayload, TimerSettings>
-  ): Promise<void> {
-    const { apiKey } = ev.payload;
-    const currentSettings = await ev.action.getSettings();
-
-    if (!apiKey) {
-      streamDeck.logger.warn('No API key provided');
-      return;
-    }
-
-    try {
-      const moneybirdService = this.createService(apiKey);
-      const rawAdministrations = await moneybirdService.getAdministrations();
-      streamDeck.logger.debug(`Fetched ${rawAdministrations.length} administrations`);
-
-      await ev.action.setSettings({
-        ...currentSettings,
-        apiKey,
-        administrations: Object.fromEntries(
-          rawAdministrations.map(admin => [admin.id, administrationToJson(admin)])
-        ),
-      });
-    } catch (fetchError) {
-      logError(streamDeck.logger, 'Error fetching Moneybird data', fetchError);
-
-      await ev.action.setSettings({
-        ...currentSettings,
-        apiKey,
-        administrations: {},
-        projects: {},
-        users: {},
-        contacts: {},
-      });
-    }
-  }
-
   override async onWillAppear(ev: WillAppearEvent<TimerSettings>): Promise<void> {
     if (!isKeyActionEvent(ev)) {
       streamDeck.logger.warn(`Ignoring non-key action for instance ${ev.action.id}`);
       return;
     }
 
-    const settings = ev.payload.settings;
+    const settings = await migrateKeyCredentials(
+      ev.action,
+      ev.payload.settings,
+      this.globalSettings,
+      streamDeck.logger
+    );
     streamDeck.logger.debug(`Action appeared for instance ${ev.action.id}`);
 
     if (settings.isRunning && settings.startTime) {
@@ -243,13 +247,14 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   }
 
   private async toggleTimer(action: TimerKeyAction, settings: TimerSettings): Promise<void> {
-    if (!settings.apiKey || !settings.administrationId || !settings.projectId || !settings.userId) {
+    const apiKey = await this.resolveApiKey(settings);
+    if (!apiKey || !settings.administrationId || !settings.projectId || !settings.userId) {
       streamDeck.logger.debug('Missing required settings');
       await setConfigNeededDisplay(action, this.getImagePath('default'));
       return;
     }
 
-    const moneybirdService = this.createService(settings.apiKey, settings.administrationId);
+    const moneybirdService = this.createService(apiKey, settings.administrationId);
 
     if (settings.isRunning) {
       await this.stopTimer(action, settings, moneybirdService);
@@ -455,7 +460,11 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     const endedAt = resolveAutoStopEndTime(settings.startTime, autoStopHours);
 
     try {
-      const moneybirdService = this.createService(settings.apiKey, settings.administrationId);
+      const apiKey = await this.resolveApiKey(settings);
+      if (!apiKey) {
+        throw new Error('No Moneybird API key configured');
+      }
+      const moneybirdService = this.createService(apiKey, settings.administrationId);
       await moneybirdService.stopTimer(settings.timeEntryId, endedAt);
     } catch (error) {
       logError(streamDeck.logger, 'Error during auto-stop', error, {

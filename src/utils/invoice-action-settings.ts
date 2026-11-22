@@ -1,11 +1,9 @@
 import { MoneybirdService } from '../services/moneybird.js';
-import {
-  InvoiceSettings,
-  administrationToJson,
-  contactToJson,
-  JsonValue,
-} from '../types/moneybird.js';
+import { InvoiceSettings, contactToJson, JsonValue } from '../types/moneybird.js';
 import { logError } from './error-logging.js';
+import { resolveApiKey } from './credentials.js';
+import type { GlobalSettingsStore } from './global-settings.js';
+import { rememberDefaultAdministration, type DependentList } from './api-key-settings.js';
 
 type InvoiceSettingsAction = {
   getSettings(): Promise<InvoiceSettings>;
@@ -18,10 +16,11 @@ type InvoiceLogger = {
   error: (...args: unknown[]) => void;
 };
 
-type MoneybirdSettingsService = Pick<MoneybirdService, 'getAdministrations' | 'getContacts'>;
+type MoneybirdSettingsService = Pick<MoneybirdService, 'getContacts'>;
 
 type SettingsDependencies = {
   logger: InvoiceLogger;
+  store: GlobalSettingsStore;
   createService?: (apiKey: string, administrationId?: string) => MoneybirdSettingsService;
 };
 
@@ -37,32 +36,36 @@ function mapContactsToSettings(
   ) as Record<string, JsonValue>;
 }
 
-function mapAdministrationsToSettings(
-  administrations: Awaited<ReturnType<MoneybirdSettingsService['getAdministrations']>>
-) {
-  return Object.fromEntries(
-    administrations.map(administration => [administration.id, administrationToJson(administration)])
-  ) as Record<string, JsonValue>;
-}
+/** The lists in the invoice property inspectors that depend on the administration. */
+export const INVOICE_LISTS: DependentList[] = [
+  {
+    list: 'contacts',
+    selection: 'contactId',
+    fetch: async service => mapContactsToSettings(await service.getContacts()),
+  },
+];
 
 export async function applyInvoiceAdministrationChange(
   action: InvoiceSettingsAction,
   administrationId: string | undefined,
   dependencies: SettingsDependencies
 ): Promise<boolean> {
-  const { logger, createService = defaultCreateService } = dependencies;
+  const { logger, store, createService = defaultCreateService } = dependencies;
   const currentSettings = await action.getSettings();
+  const apiKey = resolveApiKey(currentSettings, await store.get());
 
   logger.debug(`handleAdministrationChange called with administrationId: ${administrationId}`);
 
-  if (!currentSettings.apiKey || !administrationId) {
+  if (!apiKey || !administrationId) {
     logger.debug('Missing apiKey or administrationId, aborting');
     return false;
   }
 
+  await rememberDefaultAdministration(store, administrationId, logger);
+
   try {
     logger.debug('Fetching contacts...');
-    const moneybirdService = createService(currentSettings.apiKey, administrationId);
+    const moneybirdService = createService(apiKey, administrationId);
     const contacts = mapContactsToSettings(await moneybirdService.getContacts());
 
     const newSettings: InvoiceSettings = {
@@ -77,49 +80,6 @@ export async function applyInvoiceAdministrationChange(
     return true;
   } catch (fetchError) {
     logError(logger, 'Error fetching Moneybird data', fetchError);
-    return false;
-  }
-}
-
-export async function applyInvoiceGlobalSettings(
-  action: InvoiceSettingsAction,
-  apiKey: string | undefined,
-  dependencies: SettingsDependencies
-): Promise<boolean> {
-  const { logger, createService = defaultCreateService } = dependencies;
-  const currentSettings = await action.getSettings();
-
-  if (!apiKey) {
-    logger.warn('No API key provided');
-    return false;
-  }
-
-  try {
-    const moneybirdService = createService(apiKey);
-    const administrations = mapAdministrationsToSettings(
-      await moneybirdService.getAdministrations()
-    );
-    logger.debug(`Fetched ${Object.keys(administrations).length} administrations`);
-
-    const newSettings: InvoiceSettings = {
-      ...currentSettings,
-      apiKey,
-      administrations,
-      displayTitle: currentSettings.displayTitle,
-    };
-
-    await action.setSettings(newSettings);
-    return true;
-  } catch (fetchError) {
-    logError(logger, 'Error fetching Moneybird data', fetchError);
-
-    const clearedSettings: InvoiceSettings = {
-      ...currentSettings,
-      apiKey,
-      administrations: {},
-      contacts: {},
-    };
-    await action.setSettings(clearedSettings);
     return false;
   }
 }

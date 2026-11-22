@@ -4,13 +4,15 @@ import type { KeyDownEvent, KeyUpEvent, WillDisappearEvent } from '@elgato/strea
 import { InvoiceCreator, type CreateInvoiceService } from '../src/actions/invoice-creator.js';
 import type { CreatedInvoice } from '../src/services/moneybird.js';
 import type { BillableEntryFilterOptions } from '../src/services/moneybird/payloads.js';
+import { GlobalSettingsStore } from '../src/utils/global-settings.js';
 import type {
   InvoiceSettings,
   MoneybirdSalesInvoice,
+  PluginGlobalSettings,
   MoneybirdTimeEntry,
 } from '../src/types/moneybird.js';
 
-const settings: InvoiceSettings = {
+const defaultSettings: InvoiceSettings = {
   apiKey: 'key',
   administrationId: '1',
   contactId: '111',
@@ -27,8 +29,12 @@ const entry = {
   paused_duration: 0,
 } as MoneybirdTimeEntry;
 
-function setup() {
+function setup(
+  settings: InvoiceSettings = defaultSettings,
+  globalSettings: PluginGlobalSettings = {}
+) {
   const titles: string[] = [];
+  const usedApiKeys: string[] = [];
   const fetchOptions: Array<BillableEntryFilterOptions | undefined> = [];
   const state: {
     createInvoice: () => Promise<CreatedInvoice>;
@@ -41,16 +47,19 @@ function setup() {
     createCount: 0,
   };
 
-  const factory: CreateInvoiceService = () => ({
-    getTimeEntriesForContact: async (_contactId, _start, _end, options) => {
-      fetchOptions.push(options);
-      return [entry];
-    },
-    createInvoiceFromTimeEntries: async () => {
-      state.createCount++;
-      return state.createInvoice();
-    },
-  });
+  const factory: CreateInvoiceService = apiKey => {
+    usedApiKeys.push(apiKey);
+    return {
+      getTimeEntriesForContact: async (_contactId, _start, _end, options) => {
+        fetchOptions.push(options);
+        return [entry];
+      },
+      createInvoiceFromTimeEntries: async () => {
+        state.createCount++;
+        return state.createInvoice();
+      },
+    };
+  };
 
   const action = {
     id: 'invoice-1',
@@ -65,7 +74,16 @@ function setup() {
     async setSettings(_next: InvoiceSettings) {},
   };
 
-  const creator = new InvoiceCreator(factory);
+  let storedGlobal: PluginGlobalSettings = { ...globalSettings };
+  const store = new GlobalSettingsStore({
+    async load() {
+      return { ...storedGlobal };
+    },
+    async save(next) {
+      storedGlobal = { ...next };
+    },
+  });
+  const creator = new InvoiceCreator(factory, store);
   const event = { action, payload: { settings } };
 
   const shortPress = async () => {
@@ -77,7 +95,7 @@ function setup() {
     creator.onWillDisappear({ action } as unknown as WillDisappearEvent<InvoiceSettings>)
   );
 
-  return { titles, fetchOptions, state, shortPress, creator, event };
+  return { titles, fetchOptions, state, shortPress, creator, event, usedApiKeys };
 }
 
 const created: Array<() => Promise<void>> = [];
@@ -131,4 +149,26 @@ test('unlinked hours are shown on the key instead of a plain success', async () 
 
   assert.ok(titles.some(title => title.includes('Check hours')));
   assert.ok(!titles.includes('✓ Created'));
+});
+
+test('a key without an API key of its own creates the invoice with the global key', async () => {
+  const { shortPress, titles, usedApiKeys, state } = setup(
+    { ...defaultSettings, apiKey: '' },
+    { apiKey: 'global-key' }
+  );
+
+  await shortPress();
+
+  assert.deepEqual(usedApiKeys, ['global-key']);
+  assert.equal(state.createCount, 1);
+  assert.ok(titles.includes('✓ Created'));
+});
+
+test('a key without any API key does not create an invoice', async () => {
+  const { shortPress, usedApiKeys, state } = setup({ ...defaultSettings, apiKey: '' });
+
+  await shortPress();
+
+  assert.deepEqual(usedApiKeys, []);
+  assert.equal(state.createCount, 0);
 });

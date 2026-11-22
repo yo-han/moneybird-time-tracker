@@ -19,19 +19,17 @@ import {
   resolvePeriodKey,
 } from '../utils/invoice-utils.js';
 import {
+  INVOICE_LISTS,
   applyInvoiceAdministrationChange,
-  applyInvoiceGlobalSettings,
 } from '../utils/invoice-action-settings.js';
 import { clearIntervalForKey, setIntervalForKey } from '../utils/runtime-timers.js';
 import { setActionDisplay } from '../utils/action-display.js';
 import { logError } from '../utils/error-logging.js';
 import { isKeyActionEvent } from '../utils/key-action.js';
-
-type InvoicePluginPayload = {
-  event?: 'setGlobalSettings' | 'administrationSelected';
-  apiKey?: string;
-  administrationId?: string;
-};
+import { applyApiKeyEvent, type ApiKeyEventPayload } from '../utils/api-key-settings.js';
+import { migrateKeyCredentials, resolveApiKey } from '../utils/credentials.js';
+import type { GlobalSettingsStore } from '../utils/global-settings.js';
+import { notifyPropertyInspector, pluginGlobalSettings } from '../utils/plugin-global-settings.js';
 
 type SummaryAction = {
   setTitle(title: string): Promise<void>;
@@ -39,9 +37,24 @@ type SummaryAction = {
   getSettings(): Promise<InvoiceSettings>;
 };
 
+type SummaryService = Pick<MoneybirdService, 'getTimeEntriesForContact'>;
+
+export type CreateSummaryService = (apiKey: string, administrationId: string) => SummaryService;
+
+function createMoneybirdService(apiKey: string, administrationId: string): SummaryService {
+  return new MoneybirdService(apiKey, administrationId);
+}
+
 @action({ UUID: 'com.johan-kuijt.moneybird-timer.invoice-summary' })
 export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
   private updateIntervals: Map<string, NodeJS.Timeout> = new Map();
+
+  constructor(
+    private readonly createService: CreateSummaryService = createMoneybirdService,
+    private readonly globalSettings: GlobalSettingsStore = pluginGlobalSettings
+  ) {
+    super();
+  }
 
   private getImagePath(type: 'default' | 'preview' | 'error'): string {
     const baseDir = 'imgs/actions/invoice';
@@ -50,13 +63,14 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
   }
 
   private async updateSummary(action: SummaryAction, settings: InvoiceSettings): Promise<void> {
-    if (!settings.apiKey || !settings.administrationId || !settings.contactId) {
+    const apiKey = resolveApiKey(settings, await this.globalSettings.get());
+    if (!apiKey || !settings.administrationId || !settings.contactId) {
       const displayTitle = settings.displayTitle || 'Not configured';
       await setActionDisplay(action, displayTitle, this.getImagePath('default'));
       return;
     }
 
-    const moneybirdService = new MoneybirdService(settings.apiKey, settings.administrationId);
+    const moneybirdService = this.createService(apiKey, settings.administrationId);
     const periodKey = resolvePeriodKey(settings);
     const { startDate, endDate } = getPeriodRange(new Date(), periodKey);
 
@@ -108,6 +122,12 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
     }
 
     const instanceId = ev.action.id;
+    await migrateKeyCredentials(
+      ev.action,
+      ev.payload.settings,
+      this.globalSettings,
+      streamDeck.logger
+    );
     await this.updateSummaryFromAction(ev.action);
 
     // Update every 30 seconds
@@ -141,16 +161,22 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
   }
 
   override async onSendToPlugin(
-    ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
+    ev: SendToPluginEvent<ApiKeyEventPayload, InvoiceSettings>
   ): Promise<void> {
     try {
       streamDeck.logger.debug(
         `Invoice summary received SendToPlugin event: ${ev.payload?.event || 'unknown'}`
       );
 
-      if (ev.payload?.event === 'setGlobalSettings') {
-        await this.handleGlobalSettings(ev);
-      } else if (ev.payload?.event === 'administrationSelected') {
+      const event = ev.payload?.event;
+      if (event === 'apiKeyChanged' || event === 'loadAdministrations') {
+        await applyApiKeyEvent(ev.action, ev.payload, {
+          store: this.globalSettings,
+          logger: streamDeck.logger,
+          dependents: INVOICE_LISTS,
+          notify: notifyPropertyInspector,
+        });
+      } else if (event === 'administrationSelected') {
         await this.handleAdministrationChange(ev);
       }
     } catch (error) {
@@ -159,23 +185,16 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
   }
 
   private async handleAdministrationChange(
-    ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
+    ev: SendToPluginEvent<ApiKeyEventPayload, InvoiceSettings>
   ): Promise<void> {
     const updated = await applyInvoiceAdministrationChange(ev.action, ev.payload.administrationId, {
       logger: streamDeck.logger,
+      store: this.globalSettings,
     });
 
     if (updated && isKeyActionEvent(ev)) {
       // Update summary after loading new data
       await this.updateSummaryFromAction(ev.action);
     }
-  }
-
-  private async handleGlobalSettings(
-    ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
-  ): Promise<void> {
-    await applyInvoiceGlobalSettings(ev.action, ev.payload.apiKey, {
-      logger: streamDeck.logger,
-    });
   }
 }

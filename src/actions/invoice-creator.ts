@@ -19,20 +19,18 @@ import {
   resolvePeriodKey,
 } from '../utils/invoice-utils.js';
 import {
+  INVOICE_LISTS,
   applyInvoiceAdministrationChange,
-  applyInvoiceGlobalSettings,
 } from '../utils/invoice-action-settings.js';
 import { clearTimeoutForKey, setTimeoutForKey } from '../utils/runtime-timers.js';
 import { setConfigNeededDisplay, setErrorDisplay } from '../utils/action-display.js';
 import { logError } from '../utils/error-logging.js';
 import { isKeyActionEvent } from '../utils/key-action.js';
 import { runExclusivePerKey } from '../utils/in-flight.js';
-
-type InvoicePluginPayload = {
-  event?: 'setGlobalSettings' | 'administrationSelected';
-  apiKey?: string;
-  administrationId?: string;
-};
+import { applyApiKeyEvent, type ApiKeyEventPayload } from '../utils/api-key-settings.js';
+import { migrateKeyCredentials, resolveApiKey } from '../utils/credentials.js';
+import type { GlobalSettingsStore } from '../utils/global-settings.js';
+import { notifyPropertyInspector, pluginGlobalSettings } from '../utils/plugin-global-settings.js';
 
 type InvoiceService = Pick<
   MoneybirdService,
@@ -53,8 +51,21 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
   private resetDisplayTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private invoicesInFlight: Set<string> = new Set();
 
-  constructor(private readonly createService: CreateInvoiceService = createMoneybirdService) {
+  constructor(
+    private readonly createService: CreateInvoiceService = createMoneybirdService,
+    private readonly globalSettings: GlobalSettingsStore = pluginGlobalSettings
+  ) {
     super();
+  }
+
+  private async resolveApiKey(settings: InvoiceSettings): Promise<string | undefined> {
+    return resolveApiKey(settings, await this.globalSettings.get());
+  }
+
+  private async isConfigured(settings: InvoiceSettings): Promise<boolean> {
+    return Boolean(
+      (await this.resolveApiKey(settings)) && settings.administrationId && settings.contactId
+    );
   }
 
   private getImagePath(type: 'default' | 'success' | 'error'): string {
@@ -103,7 +114,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
           settings.periodRange !== undefined)
       ) {
         // Update title with period info if configured
-        if (settings.apiKey && settings.administrationId && settings.contactId) {
+        if (await this.isConfigured(settings)) {
           const periodLabel = getPeriodLabel(resolvePeriodKey(settings));
           const displayTitle = settings.displayTitle || 'Invoice';
           await ev.action.setTitle(`${displayTitle}\n${periodLabel}`);
@@ -120,37 +131,30 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
   }
 
   override async onSendToPlugin(
-    ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
+    ev: SendToPluginEvent<ApiKeyEventPayload, InvoiceSettings>
   ): Promise<void> {
     try {
       streamDeck.logger.debug(
         `Invoice plugin received SendToPlugin event: ${ev.payload?.event || 'unknown'}`
       );
 
-      if (ev.payload?.event === 'setGlobalSettings') {
-        await this.handleGlobalSettings(ev);
-      } else if (ev.payload?.event === 'administrationSelected') {
-        await this.handleAdministrationChange(ev);
+      const event = ev.payload?.event;
+      if (event === 'apiKeyChanged' || event === 'loadAdministrations') {
+        await applyApiKeyEvent(ev.action, ev.payload, {
+          store: this.globalSettings,
+          logger: streamDeck.logger,
+          dependents: INVOICE_LISTS,
+          notify: notifyPropertyInspector,
+        });
+      } else if (event === 'administrationSelected') {
+        await applyInvoiceAdministrationChange(ev.action, ev.payload.administrationId, {
+          logger: streamDeck.logger,
+          store: this.globalSettings,
+        });
       }
     } catch (error) {
       logError(streamDeck.logger, 'Unexpected error in onSendToPlugin', error);
     }
-  }
-
-  private async handleAdministrationChange(
-    ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
-  ): Promise<void> {
-    await applyInvoiceAdministrationChange(ev.action, ev.payload.administrationId, {
-      logger: streamDeck.logger,
-    });
-  }
-
-  private async handleGlobalSettings(
-    ev: SendToPluginEvent<InvoicePluginPayload, InvoiceSettings>
-  ): Promise<void> {
-    await applyInvoiceGlobalSettings(ev.action, ev.payload.apiKey, {
-      logger: streamDeck.logger,
-    });
   }
 
   override async onWillAppear(ev: WillAppearEvent<InvoiceSettings>): Promise<void> {
@@ -159,7 +163,12 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
       return;
     }
 
-    const settings = ev.payload.settings;
+    const settings = await migrateKeyCredentials(
+      ev.action,
+      ev.payload.settings,
+      this.globalSettings,
+      streamDeck.logger
+    );
     const instanceId = ev.action.id;
 
     streamDeck.logger.debug(`Invoice action appeared for instance ${instanceId}`);
@@ -167,7 +176,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     await ev.action.setImage(this.getImagePath('default'));
 
     // Show period in title if configured
-    if (settings.apiKey && settings.administrationId && settings.contactId) {
+    if (await this.isConfigured(settings)) {
       const periodLabel = getPeriodLabel(resolvePeriodKey(settings));
       const displayTitle = settings.displayTitle || 'Invoice';
       await ev.action.setTitle(`${displayTitle}\n${periodLabel}`);
@@ -193,7 +202,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
 
     streamDeck.logger.debug(`Invoice key pressed for instance ${instanceId}`);
 
-    if (!settings.apiKey || !settings.administrationId || !settings.contactId) {
+    if (!(await this.isConfigured(settings))) {
       streamDeck.logger.debug('Missing required settings');
       await setConfigNeededDisplay(ev.action, this.getImagePath('default'));
       return;
@@ -281,9 +290,13 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
     const settings = ev.payload.settings;
     const instanceId = ev.action.id;
 
-    const moneybirdService = this.createService(settings.apiKey, settings.administrationId);
-
     try {
+      const apiKey = await this.resolveApiKey(settings);
+      if (!apiKey) {
+        throw new Error('No Moneybird API key configured');
+      }
+      const moneybirdService = this.createService(apiKey, settings.administrationId);
+
       // Show processing state
       await ev.action.setTitle('Creating...');
 
