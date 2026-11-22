@@ -1203,3 +1203,20 @@ test('a start that Moneybird rejected is not looked up', async () => {
   assert.equal(service.lookups.length, 0);
   assert.equal(fake.current().isRunning, undefined);
 });
+
+test('after a start without an answer, a stopped entry or another project is not taken', async () => {
+  const { fake, service, keyDown } = setup({ ...configured });
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  const minute = new Date(Math.floor(Date.now() / 60_000) * 60_000).toISOString();
+  service.state.recentEntries = [
+    remoteEntry({ id: 'stopped', started_at: minute, ended_at: new Date().toISOString() }),
+    remoteEntry({ id: 'other-project', started_at: minute, project_id: '5' }),
+  ];
+
+  await keyDown();
+
+  assert.equal(fake.current().isRunning, undefined);
+  assert.equal(fake.titles.at(-1), 'Error');
+});
