@@ -1413,3 +1413,20 @@ test('an entry the key did not start is still marked as picked up', async () => 
   assert.equal(fake.current().timeEntryId, 'web-app');
   assert.equal(fake.current().timerPickedUp, true);
 });
+
+test('a found unconfirmed start also clears a leftover picked-up mark', async () => {
+  freezeClock();
+  const { fake, service, tracker, keyDown } = setup({ ...configured, timerPickedUp: true });
+  await appear(tracker, fake);
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  service.state.recentEntries = [];
+  await keyDown();
+
+  service.state.recentEntries = [remoteEntry({ id: 'created-1', started_at: pressMinute() })];
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.current().timeEntryId, 'created-1');
+  assert.equal('timerPickedUp' in fake.current(), false);
+});
