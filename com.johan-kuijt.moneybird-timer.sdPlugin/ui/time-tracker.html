@@ -43,7 +43,7 @@
     </sdpi-item>
 
     <sdpi-item id="ownApiKeyItem" label="Key for this key" class="hidden">
-        <sdpi-password id="apiKey" setting="apiKey" placeholder="For another Moneybird account"></sdpi-password>
+        <sdpi-password id="apiKey" placeholder="For another Moneybird account"></sdpi-password>
         <div id="apiKeyError" class="error hidden"></div>
     </sdpi-item>
 
@@ -114,7 +114,6 @@
         'use strict';
         
         const { streamDeckClient } = SDPIComponents;
-        let isConnected = false;
         let currentSettings = {};
         let isLoading = false;
         let administrationsRequested = false;
@@ -353,42 +352,23 @@
             }
         }
 
-        async function saveSettings() {
-            if (!isConnected) return;
-
-            const settings = {};
-            const elements = document.querySelectorAll('[setting]');
-            
-            elements.forEach(element => {
-                const settingName = element.getAttribute('setting');
-                
-                if (settingName) {
-                    let value;
-                    if (element.tagName === 'SDPI-CHECKBOX') {
-                        value = element.value === true || element.value === 'true';
-                    } else if (element.tagName === 'SDPI-SELECT' && settingName === 'autoStopHours') {
-                        // Parse auto-stop hours as float
-                        value = parseFloat(element.value) || 4;
-                    } else {
-                        value = element.value || '';
-                    }
-                
-                    settings[settingName] = value;
-                }
-            });
-
-            await streamDeckClient.setSettings(settings);
-            currentSettings = {...currentSettings, ...settings};
-        }
-
         function initializeEventListeners() {
             try {
-                // Listen for all setting changes
+                // sdpi-components saves every element with a setting attribute itself,
+                // merged into the full settings of this key. A second save here that
+                // sent only the form fields replaced those settings for a moment and
+                // dropped the running timer and the lists (#198). Only keep the local
+                // copy current, which updateDropdown() uses to restore a selection.
+                // valuechange is the component's own event, fired once the new value is
+                // set; on input or change a select or checkbox still has the old value.
                 const settingElements = document.querySelectorAll('[setting]');
                 settingElements.forEach(element => {
-                    // Use both input and change events for better compatibility
-                    element.addEventListener('input', saveSettings);
-                    element.addEventListener('change', saveSettings);
+                    element.addEventListener('valuechange', () => {
+                        currentSettings = {
+                            ...currentSettings,
+                            [element.getAttribute('setting')]: element.value
+                        };
+                    });
                 });
 
                 // API key inputs - check the key with Moneybird and load administrations
@@ -424,8 +404,7 @@
                         if (!enabled) {
                             // The plugin removes the own key (or refuses while a timer runs
                             // that the shared key cannot reach). The field is cleared once
-                            // the plugin's settings arrive, not here: the component would
-                            // save the empty value right away.
+                            // the plugin's settings arrive, so a refusal can show it again.
                             hideError('apiKey');
                             sendApiKeyChange('key', '');
                         }
@@ -566,9 +545,7 @@
                 const parsedActionInfo = JSON.parse(actionInfo);
                 actionContext = parsedActionInfo?.context || null;
                 await streamDeckClient.connect(port, uuid, event, JSON.parse(info), parsedActionInfo);
-                
-                isConnected = true;
-                
+
                 initializeEventListeners();
                 await loadGlobalApiKey();
                 
