@@ -1430,3 +1430,54 @@ test('a found unconfirmed start also clears a leftover picked-up mark', async ()
   assert.equal(fake.current().timeEntryId, 'created-1');
   assert.equal('timerPickedUp' in fake.current(), false);
 });
+
+test('a found unconfirmed start is auto-stopped, also with a leftover picked-up mark', async () => {
+  // Real timers for the auto-stop timeout would be slow; mock them, and Date too.
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: FROZEN_NOW });
+  const { fake, service, tracker, keyDown } = setup({
+    ...configured,
+    autoStopEnabled: true,
+    autoStopHours: 4,
+    timerPickedUp: true,
+  });
+  await appear(tracker, fake);
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  service.state.recentEntries = [];
+  await keyDown();
+  const startedAt = pressMinute();
+
+  // Found five hours later, past the 4 h limit.
+  mock.timers.setTime(FROZEN_NOW + 5 * HOUR_MS);
+  service.state.recentEntries = [remoteEntry({ id: 'created-1', started_at: startedAt })];
+  await tracker.syncWithMoneybird();
+  mock.timers.tick(1_000);
+  await flushPromises();
+
+  assert.equal(service.stopCalls.length, 1);
+  assert.equal(service.stopCalls[0]?.timeEntryId, 'created-1');
+});
+
+test('a confirmed start forgets an earlier unconfirmed one', async () => {
+  freezeClock();
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  await appear(tracker, fake);
+  service.state.startTimer = async () => {
+    throw noResponse();
+  };
+  service.state.recentEntries = [];
+  await keyDown();
+  const unconfirmedMinute = pressMinute();
+
+  // The next press works; the timer is stopped again.
+  service.state.startTimer = async () => ({ id: 'entry-2' }) as MoneybirdTimeEntry;
+  await keyDown();
+  await keyDown();
+
+  service.state.recentEntries = [remoteEntry({ id: 'orphan-1', started_at: unconfirmedMinute })];
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.current().timeEntryId, 'orphan-1');
+  assert.equal(fake.current().timerPickedUp, true);
+});

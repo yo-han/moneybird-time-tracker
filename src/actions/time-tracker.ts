@@ -576,7 +576,13 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
           ? `Key ${action.id} found its unconfirmed start ${entry.id}`
           : `Key ${action.id} picked up timer ${entry.id} started elsewhere`
       );
-      await this.showRunning(action, { ...latest, ...timerState });
+      // The display gets the same mark as the stored settings, so a leftover one from
+      // `latest` cannot switch off the auto-stop of the key's own start.
+      await this.showRunning(action, {
+        ...latest,
+        ...timerState,
+        timerPickedUp: startedByThisKey ? undefined : true,
+      });
     });
   }
 
@@ -671,6 +677,10 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         `Start for ${instanceId} got no answer; found entry ${timeEntry.id} in Moneybird`
       );
     }
+
+    // This press got its entry, so an earlier start the key could not confirm is no longer
+    // the key's last start: an entry from it that turns up later is treated as picked up.
+    this.unconfirmedStarts.delete(instanceId);
 
     try {
       const timerState = {
