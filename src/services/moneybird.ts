@@ -19,6 +19,7 @@ import {
   buildInvoicePayload,
   buildStartTimerPayload,
   buildStopTimerPayload,
+  buildRecentTimeEntriesFilter,
   buildTimeEntriesFilter,
   buildTimeEntryInvoiceLinkPayload,
   filterBillableContactEntries,
@@ -258,6 +259,39 @@ export class MoneybirdService {
 
       return response.data;
     } catch (error: unknown) {
+      return throwMoneybirdApiError(this.logger, error);
+    }
+  }
+
+  /**
+   * Every entry of a user that started in the period, running ones included. Used to find
+   * a timer started elsewhere and to notice a key's own timer stopped elsewhere.
+   */
+  async getRecentTimeEntries(
+    userId: string,
+    since: Date,
+    until: Date = new Date()
+  ): Promise<MoneybirdTimeEntry[]> {
+    try {
+      const filter = buildRecentTimeEntriesFilter(userId, since, until);
+      return await this.getAllPages<MoneybirdTimeEntry>(
+        this.administrationUrl('time_entries.json'),
+        { filter },
+        'truncate'
+      );
+    } catch (error) {
+      return throwMoneybirdApiError(this.logger, error);
+    }
+  }
+
+  async getTimeEntry(timeEntryId: string): Promise<MoneybirdTimeEntry> {
+    try {
+      const response = await this.httpClient.get<MoneybirdTimeEntry>(
+        this.administrationUrl(`time_entries/${timeEntryId}.json`),
+        this.requestConfig()
+      );
+      return response.data;
+    } catch (error) {
       return throwMoneybirdApiError(this.logger, error);
     }
   }

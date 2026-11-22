@@ -64,6 +64,19 @@ export function buildTimeEntriesFilter(contactId: string, startDate: Date, endDa
   return `period:${format(startDate, 'yyyyMMdd')}..${format(endDate, 'yyyyMMdd')},contact_id:${contactId},state:all`;
 }
 
+/**
+ * Builds the `filter` for every entry of one user in a period, running ones included
+ * (`include_active`; Moneybird leaves entries without `ended_at` out by default). The period
+ * is matched on the start date. The user id is validated because it is interpolated.
+ */
+export function buildRecentTimeEntriesFilter(userId: string, since: Date, until: Date): string {
+  if (!MONEYBIRD_ID_PATTERN.test(userId)) {
+    throw new Error(`Invalid Moneybird user id: "${userId}"`);
+  }
+
+  return `period:${format(since, 'yyyyMMdd')}..${format(until, 'yyyyMMdd')},state:all,include_active:true,user_id:${userId}`;
+}
+
 export type BillableEntryFilterOptions = {
   /** Drop entries that are already on a sales invoice, so they are never billed twice. */
   excludeInvoiced?: boolean;

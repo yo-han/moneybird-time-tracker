@@ -540,3 +540,68 @@ test('linking keeps at most a few requests in flight and links every entry', asy
   assert.equal(new Set(linked).size, 25);
   assert.equal(maxInFlight, MONEYBIRD_LINK_CONCURRENCY);
 });
+
+test('getRecentTimeEntries asks for every entry of the user in the period, running ones included', async () => {
+  const http = createHttpClient();
+  http.responses.get = [
+    { id: '1', user_id: '7', ended_at: null },
+    { id: '2', user_id: '7', ended_at: '2026-11-22T10:00:00.000Z' },
+  ] as MoneybirdTimeEntry[];
+  const service = new MoneybirdService('secret-key', 'admin-1', {
+    httpClient: http.client,
+    logger: createLogger(),
+  });
+
+  const result = await service.getRecentTimeEntries(
+    '7',
+    new Date(2026, 10, 21, 13, 0),
+    new Date(2026, 10, 22, 13, 0)
+  );
+
+  assert.deepEqual(
+    result.map(entry => entry.id),
+    ['1', '2']
+  );
+  assert.equal(http.calls[0]?.url, 'https://moneybird.com/api/v2/admin-1/time_entries.json');
+  assert.deepEqual((http.calls[0]?.config as { params: unknown }).params, {
+    filter: 'period:20261121..20261122,state:all,include_active:true,user_id:7',
+    page: 1,
+    per_page: MONEYBIRD_PAGE_SIZE,
+  });
+  assert.equal(
+    (http.calls[0]?.config as { timeout?: number }).timeout,
+    MONEYBIRD_REQUEST_TIMEOUT_MS
+  );
+});
+
+test('getRecentTimeEntries refuses a user id that would break the filter', async () => {
+  const http = createHttpClient();
+  const service = new MoneybirdService('secret-key', 'admin-1', {
+    httpClient: http.client,
+    logger: createLogger(),
+  });
+
+  await assert.rejects(
+    service.getRecentTimeEntries('7,project_id:1', new Date(), new Date()),
+    /Invalid Moneybird user id/
+  );
+  assert.equal(http.calls.length, 0);
+});
+
+test('getTimeEntry fetches one entry with a timeout', async () => {
+  const http = createHttpClient();
+  http.responses.get = { id: '42', ended_at: '2026-11-22T10:00:00.000Z' };
+  const service = new MoneybirdService('secret-key', 'admin-1', {
+    httpClient: http.client,
+    logger: createLogger(),
+  });
+
+  const entry = await service.getTimeEntry('42');
+
+  assert.equal(entry.ended_at, '2026-11-22T10:00:00.000Z');
+  assert.equal(http.calls[0]?.url, 'https://moneybird.com/api/v2/admin-1/time_entries/42.json');
+  assert.equal(
+    (http.calls[0]?.config as { timeout?: number }).timeout,
+    MONEYBIRD_REQUEST_TIMEOUT_MS
+  );
+});
