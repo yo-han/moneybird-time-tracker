@@ -698,12 +698,32 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         instanceId,
         timeEntryId: timeEntry.id,
       });
-      // The entry exists in Moneybird. If saving it failed, the key does not hold it:
+      const latest = await this.readSettingsAfterFailure(action);
+      if (latest?.isRunning && latest.timeEntryId === timeEntry.id) {
+        // Only the display failed: the key holds the entry, and the sync leaves a running
+        // key alone. Show it running again, which also schedules its refresh and auto-stop.
+        await this.flashError(action, () => this.showRunning(action, latest));
+        return;
+      }
+      // The entry exists in Moneybird, but saving it failed, so the key does not hold it:
       // remember it like a start without an answer, so the next sync picks it up as this
-      // key's own and keeps its auto-stop. (If only the display failed, the key already
-      // holds the entry and the sync leaves it alone.)
+      // key's own and keeps its auto-stop.
       this.rememberUnconfirmedStart(instanceId, settings, startedAt);
       await this.flashError(action, () => this.showIdle(action, settings));
+    }
+  }
+
+  /** The key's settings, or undefined (logged) when they cannot be read either. */
+  private async readSettingsAfterFailure(
+    action: TimerKeyAction
+  ): Promise<TimerSettings | undefined> {
+    try {
+      return await action.getSettings();
+    } catch (error: unknown) {
+      logError(streamDeck.logger, 'Error reading settings after a failed start', error, {
+        instanceId: action.id,
+      });
+      return undefined;
     }
   }
 

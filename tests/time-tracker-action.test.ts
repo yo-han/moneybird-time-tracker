@@ -1514,3 +1514,77 @@ test("a started timer whose save failed is found later as the key's own start", 
   assert.equal(service.stopCalls.length, 1);
   assert.equal(service.stopCalls[0]?.timeEntryId, 'entry-1');
 });
+
+test('a started timer whose display failed after the save shows running and auto-stops', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: FROZEN_NOW });
+  const { fake, service, tracker, keyDown } = setup({
+    ...configured,
+    autoStopEnabled: true,
+    autoStopHours: 4,
+  });
+  await appear(tracker, fake);
+  service.state.startTimer = async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry;
+  // The save succeeds; the first redraw after it fails once.
+  const save = fake.action.setSettings;
+  const draw = fake.action.setImage;
+  let failNextImage = false;
+  fake.action.setSettings = async next => {
+    await save(next);
+    failNextImage = true;
+  };
+  fake.action.setImage = async image => {
+    if (failNextImage) {
+      failNextImage = false;
+      throw new Error('image could not be set');
+    }
+    await draw(image);
+  };
+  await keyDown();
+  assert.equal(fake.current().isRunning, true);
+  assert.equal(fake.current().timeEntryId, 'entry-1');
+  assert.equal(fake.titles.at(-1), 'Error');
+
+  // After the error flash the key shows the running timer again.
+  mock.timers.tick(2_000);
+  await flushPromises();
+  assert.match(fake.titles.at(-1) ?? '', /^⏱️/);
+
+  mock.timers.tick(4 * HOUR_MS);
+  await flushPromises();
+  assert.equal(service.stopCalls.length, 1);
+  assert.equal(service.stopCalls[0]?.timeEntryId, 'entry-1');
+});
+
+test('a start whose display and settings read both failed falls back to the idle key', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: FROZEN_NOW });
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  await appear(tracker, fake);
+  service.state.startTimer = async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry;
+  const save = fake.action.setSettings;
+  const draw = fake.action.setImage;
+  const read = fake.action.getSettings;
+  let failAfterSave = false;
+  fake.action.setSettings = async next => {
+    await save(next);
+    failAfterSave = true;
+  };
+  fake.action.setImage = async image => {
+    if (failAfterSave) {
+      throw new Error('image could not be set');
+    }
+    await draw(image);
+  };
+  fake.action.getSettings = async () => {
+    if (failAfterSave) {
+      failAfterSave = false;
+      throw new Error('settings could not be read');
+    }
+    return read();
+  };
+
+  await keyDown();
+  assert.equal(fake.titles.at(-1), 'Error');
+  mock.timers.tick(2_000);
+  await flushPromises();
+  assert.equal(fake.titles.at(-1), 'Start');
+});
