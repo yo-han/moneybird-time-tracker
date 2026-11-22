@@ -150,9 +150,10 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   private syncRun: Promise<void> | undefined;
   private syncAgain = false;
   /**
-   * Starts whose outcome stayed unknown (no answer, and the entry not found right away),
-   * per key: if the sync finds that entry later, it is the key's own timer, not one
-   * picked up from elsewhere, so it keeps auto-stop.
+   * Starts whose entry the key does not hold (no answer and not found right away, or the
+   * save failed), per key: if the sync finds that entry later, it is the key's own timer,
+   * not one picked up from elsewhere, so it keeps auto-stop; the next press takes it
+   * instead of starting another.
    */
   private unconfirmedStarts: Map<
     string,
@@ -649,6 +650,22 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   ): Promise<void> {
     const instanceId = action.id;
 
+    // An earlier start of this key may have created an entry that the key does not show
+    // yet. Starting again would leave that one running unseen, so take it instead.
+    const earlierEntry = await this.findEarlierUnconfirmedStart(action, moneybirdService, settings);
+    if (earlierEntry) {
+      streamDeck.logger.info(
+        `Press on ${instanceId} took its earlier unconfirmed start ${earlierEntry.id}`
+      );
+      await this.holdStartedTimer(
+        action,
+        settings,
+        earlierEntry,
+        new Date(earlierEntry.started_at)
+      );
+      return;
+    }
+
     let timeEntry: MoneybirdTimeEntry | undefined;
     try {
       timeEntry = await moneybirdService.startTimer(settings, startedAt);
@@ -674,8 +691,21 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       );
     }
 
-    // This press got its entry, so an earlier start the key could not confirm is no longer
-    // the key's last start: an entry from it that turns up later is treated as picked up.
+    await this.holdStartedTimer(action, settings, timeEntry, startedAt);
+  }
+
+  /** Saves and shows a started entry as this key's running timer. */
+  private async holdStartedTimer(
+    action: TimerKeyAction,
+    settings: TimerSettings,
+    timeEntry: MoneybirdTimeEntry,
+    startedAt: Date
+  ): Promise<void> {
+    const instanceId = action.id;
+
+    // The key now holds an entry, so no start of it is left unconfirmed: either this was
+    // the unconfirmed one, or an entry from an earlier start that turns up later is
+    // treated as picked up.
     this.unconfirmedStarts.delete(instanceId);
 
     try {
@@ -749,7 +779,37 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   }
 
   /**
-   * After a start whose outcome is unknown: the entry this press created, if Moneybird did.
+   * The entry of this key's last unconfirmed start, if Moneybird has it running, it started
+   * within the sync's pick-up window, and the press is for the same project and
+   * description. Otherwise undefined, and the press starts a new entry. That includes a
+   * failed lookup, so an existing earlier entry can then still run on unseen.
+   */
+  private async findEarlierUnconfirmedStart(
+    action: TimerKeyAction,
+    moneybirdService: TimerService,
+    settings: TimerSettings
+  ): Promise<MoneybirdTimeEntry | undefined> {
+    const unconfirmed = this.unconfirmedStarts.get(action.id);
+    if (
+      !unconfirmed ||
+      // Older than the window it is most likely forgotten, as for the sync: taking it
+      // would record days of work on the next press.
+      Date.now() - unconfirmed.startedAt > PICK_UP_WINDOW_MS ||
+      unconfirmed.projectId !== settings.projectId ||
+      unconfirmed.description !== (settings.description || DEFAULT_TIME_ENTRY_DESCRIPTION)
+    ) {
+      return undefined;
+    }
+    return this.findUnansweredStart(
+      action,
+      moneybirdService,
+      settings,
+      new Date(unconfirmed.startedAt)
+    );
+  }
+
+  /**
+   * After a start whose outcome is unknown: the entry that press created, if Moneybird did.
    * Moneybird stores the start as the press minute exactly (the payload sends HH:mm), so the
    * entry must have that start, this key's project and description, and not be shown by
    * another key; only a single such entry is taken.

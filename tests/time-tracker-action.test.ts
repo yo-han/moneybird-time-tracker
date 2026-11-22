@@ -1482,6 +1482,139 @@ test('a confirmed start forgets an earlier unconfirmed one', async () => {
   assert.equal(fake.current().timerPickedUp, true);
 });
 
+/** Starts entry-1 with a press whose save fails, so only the unconfirmed record knows it. */
+async function startWithFailedSave(
+  fake: ReturnType<typeof createFakeAction>,
+  service: ReturnType<typeof createFakeService>,
+  keyDown: () => Promise<void>
+): Promise<string> {
+  service.state.startTimer = async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry;
+  const save = fake.action.setSettings;
+  fake.action.setSettings = async () => {
+    throw new Error('settings could not be saved');
+  };
+  await keyDown();
+  fake.action.setSettings = save;
+  assert.equal(fake.current().isRunning, undefined);
+  return pressMinute();
+}
+
+test('a press after a start whose save failed takes that entry instead of starting another', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: FROZEN_NOW });
+  const { fake, service, tracker, keyDown } = setup({
+    ...configured,
+    autoStopEnabled: true,
+    autoStopHours: 4,
+  });
+  await appear(tracker, fake);
+  const startedAt = await startWithFailedSave(fake, service, keyDown);
+
+  // Pressed again ten minutes later, before the sync found it.
+  mock.timers.tick(10 * MINUTE_MS);
+  service.state.recentEntries = [remoteEntry({ id: 'entry-1', started_at: startedAt })];
+  service.state.startTimer = async () => ({ id: 'entry-2' }) as MoneybirdTimeEntry;
+  await keyDown();
+
+  assert.equal(service.state.startCount, 1);
+  assert.equal(fake.current().isRunning, true);
+  assert.equal(fake.current().timeEntryId, 'entry-1');
+  assert.equal(fake.current().startTime, startedAt);
+  assert.equal('timerPickedUp' in fake.current(), false);
+
+  // Its own start: auto-stopped at the limit from the first press, not from this one.
+  const deadline = Date.parse(startedAt) + 4 * HOUR_MS;
+  mock.timers.tick(deadline - Date.now() - 1_000);
+  await flushPromises();
+  assert.equal(service.stopCalls.length, 0);
+
+  mock.timers.tick(1_000);
+  await flushPromises();
+  assert.equal(service.stopCalls.length, 1);
+  assert.equal(service.stopCalls[0]?.timeEntryId, 'entry-1');
+  assert.equal(service.stopCalls[0]?.endedAt.getTime(), deadline);
+});
+
+test('a press a day after a start whose save failed starts a new entry', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: FROZEN_NOW });
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  await appear(tracker, fake);
+  const startedAt = await startWithFailedSave(fake, service, keyDown);
+
+  // Still running in Moneybird, but past the sync's pick-up window: likely forgotten.
+  mock.timers.tick(25 * HOUR_MS);
+  service.state.recentEntries = [remoteEntry({ id: 'entry-1', started_at: startedAt })];
+  service.state.startTimer = async () => ({ id: 'entry-2' }) as MoneybirdTimeEntry;
+  await keyDown();
+
+  assert.equal(service.state.startCount, 2);
+  assert.equal(fake.current().timeEntryId, 'entry-2');
+});
+
+test('a press after an unconfirmed start that Moneybird does not have starts a new entry', async () => {
+  freezeClock();
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  await appear(tracker, fake);
+  await startWithFailedSave(fake, service, keyDown);
+
+  service.state.recentEntries = [];
+  service.state.startTimer = async () => ({ id: 'entry-2' }) as MoneybirdTimeEntry;
+  await keyDown();
+
+  assert.equal(service.state.startCount, 2);
+  assert.equal(fake.current().timeEntryId, 'entry-2');
+});
+
+test('a press after an unconfirmed start whose lookup fails starts a new entry', async () => {
+  freezeClock();
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  await appear(tracker, fake);
+  const startedAt = await startWithFailedSave(fake, service, keyDown);
+
+  service.state.recentEntries = [remoteEntry({ id: 'entry-1', started_at: startedAt })];
+  service.state.lookupError = new MoneybirdApiError('Server error: 503', 503);
+  service.state.startTimer = async () => ({ id: 'entry-2' }) as MoneybirdTimeEntry;
+  await keyDown();
+
+  assert.equal(service.state.startCount, 2);
+  assert.equal(fake.current().timeEntryId, 'entry-2');
+});
+
+test('a press for another project after an unconfirmed start starts a new entry', async () => {
+  freezeClock();
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  await appear(tracker, fake);
+  const startedAt = await startWithFailedSave(fake, service, keyDown);
+
+  await fake.action.setSettings({ ...fake.current(), projectId: '9' });
+  service.state.recentEntries = [
+    remoteEntry({ id: 'entry-1', started_at: startedAt }),
+    remoteEntry({ id: 'other-1', project_id: '9', started_at: startedAt }),
+  ];
+  service.state.startTimer = async () => ({ id: 'entry-2' }) as MoneybirdTimeEntry;
+  await keyDown();
+
+  assert.equal(service.state.startCount, 2);
+  assert.equal(fake.current().timeEntryId, 'entry-2');
+});
+
+test('a press with another description after an unconfirmed start starts a new entry', async () => {
+  freezeClock();
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  await appear(tracker, fake);
+  const startedAt = await startWithFailedSave(fake, service, keyDown);
+
+  await fake.action.setSettings({ ...fake.current(), description: 'Review' });
+  service.state.recentEntries = [
+    remoteEntry({ id: 'entry-1', started_at: startedAt }),
+    remoteEntry({ id: 'other-1', description: 'Review', started_at: startedAt }),
+  ];
+  service.state.startTimer = async () => ({ id: 'entry-2' }) as MoneybirdTimeEntry;
+  await keyDown();
+
+  assert.equal(service.state.startCount, 2);
+  assert.equal(fake.current().timeEntryId, 'entry-2');
+});
+
 test("a started timer whose save failed is found later as the key's own start", async () => {
   // Real timers for the auto-stop timeout would be slow; mock them, and Date too.
   mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: FROZEN_NOW });
