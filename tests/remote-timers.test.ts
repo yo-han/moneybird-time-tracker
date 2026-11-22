@@ -91,3 +91,21 @@ test('a running key is reported as stopped elsewhere only when its own entry has
     ['k1']
   );
 });
+
+test('only keys with the entry project count as candidates', () => {
+  // Same user and default description on both keys; only the project tells them apart.
+  const decision = decideRemoteTimers(
+    [
+      { id: 'k1', settings: idle },
+      { id: 'k2', settings: { ...idle, projectId: '5' } },
+    ],
+    [entry('a')],
+    now,
+    new Set()
+  );
+
+  assert.deepEqual(
+    decision.pickUp.map(pick => pick.keyId),
+    ['k1']
+  );
+});
