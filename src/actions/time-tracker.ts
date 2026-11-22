@@ -35,6 +35,7 @@ import {
   type DependentList,
 } from '../utils/api-key-settings.js';
 import { migrateKeyCredentials, resolveApiKeyFromStore } from '../utils/credentials.js';
+import { runInOrder, writePatch } from '../utils/settings-writes.js';
 import type { GlobalSettingsStore } from '../utils/global-settings.js';
 import { notifyPropertyInspector, pluginGlobalSettings } from '../utils/plugin-global-settings.js';
 
@@ -161,7 +162,18 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     }
   }
 
-  private async handleAdministrationChange(
+  /**
+   * Loads the lists of the picked administration. Runs in the key's queue with the API key
+   * events, and writes only its own fields onto the settings as they are once the lists
+   * are in, so a timer started or a field saved meanwhile is kept.
+   */
+  private handleAdministrationChange(
+    ev: SendToPluginEvent<ApiKeyEventPayload, TimerSettings>
+  ): Promise<void> {
+    return runInOrder(ev.action.id, () => this.loadAdministrationLists(ev));
+  }
+
+  private async loadAdministrationLists(
     ev: SendToPluginEvent<ApiKeyEventPayload, TimerSettings>
   ): Promise<void> {
     const { administrationId } = ev.payload;
@@ -188,19 +200,20 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         `Fetched ${rawProjects.length} projects, ${rawUsers.length} users and ${rawContacts.length} contacts for administration ${administrationId}`
       );
 
-      await ev.action.setSettings({
-        ...currentSettings,
-        administrationId,
-        projects: Object.fromEntries(
-          rawProjects.map(project => [project.id, projectToJson(project)])
-        ),
-        users: Object.fromEntries(rawUsers.map(user => [user.id, userToJson(user)])),
-        contacts: Object.fromEntries(
-          rawContacts.map(contact => [contact.id, contactToJson(contact)])
-        ),
-        projectId: '',
-        userId: '',
-        contactId: '',
+      await writePatch(ev.action, {
+        values: {
+          administrationId,
+          projects: Object.fromEntries(
+            rawProjects.map(project => [project.id, projectToJson(project)])
+          ),
+          users: Object.fromEntries(rawUsers.map(user => [user.id, userToJson(user)])),
+          contacts: Object.fromEntries(
+            rawContacts.map(contact => [contact.id, contactToJson(contact)])
+          ),
+          projectId: '',
+          userId: '',
+          contactId: '',
+        },
       });
     } catch (fetchError) {
       logError(streamDeck.logger, 'Error fetching Moneybird data', fetchError, {

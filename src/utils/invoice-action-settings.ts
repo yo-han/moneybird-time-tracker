@@ -4,11 +4,9 @@ import { logError } from './error-logging.js';
 import { resolveApiKeyFromStore } from './credentials.js';
 import type { GlobalSettingsStore } from './global-settings.js';
 import { rememberDefaultAdministration, type DependentList } from './api-key-settings.js';
+import { runInOrder, writePatch, type SettingsAction } from './settings-writes.js';
 
-type InvoiceSettingsAction = {
-  getSettings(): Promise<InvoiceSettings>;
-  setSettings(settings: InvoiceSettings): Promise<void>;
-};
+type InvoiceSettingsAction = SettingsAction<InvoiceSettings>;
 
 type InvoiceLogger = {
   debug: (...args: unknown[]) => void;
@@ -45,7 +43,22 @@ export const INVOICE_LISTS: DependentList[] = [
   },
 ];
 
-export async function applyInvoiceAdministrationChange(
+/**
+ * Loads the contacts of the picked administration. Runs in the key's queue with the API key
+ * events, and writes only its own fields onto the settings as they are once the contacts are
+ * in, so a field saved meanwhile is kept.
+ */
+export function applyInvoiceAdministrationChange(
+  action: InvoiceSettingsAction,
+  administrationId: string | undefined,
+  dependencies: SettingsDependencies
+): Promise<boolean> {
+  return runInOrder(action.id, () =>
+    loadInvoiceAdministration(action, administrationId, dependencies)
+  );
+}
+
+async function loadInvoiceAdministration(
   action: InvoiceSettingsAction,
   administrationId: string | undefined,
   dependencies: SettingsDependencies
@@ -68,14 +81,7 @@ export async function applyInvoiceAdministrationChange(
     const moneybirdService = createService(apiKey, administrationId);
     const contacts = mapContactsToSettings(await moneybirdService.getContacts());
 
-    const newSettings: InvoiceSettings = {
-      ...currentSettings,
-      administrationId,
-      contacts,
-      contactId: '',
-    };
-
-    await action.setSettings(newSettings);
+    await writePatch(action, { values: { administrationId, contacts, contactId: '' } });
     logger.debug('Settings saved with new data');
     return true;
   } catch (fetchError) {
