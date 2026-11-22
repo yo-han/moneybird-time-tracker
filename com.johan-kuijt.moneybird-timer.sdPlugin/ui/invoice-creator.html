@@ -169,8 +169,9 @@
                 
                 const hourlyRateElement = document.getElementById('hourlyRate');
                 if (hourlyRateElement && (!settings.hourlyRate || settings.hourlyRate === '')) {
+                    // The hint itself is the placeholder attribute in the markup; assigning
+                    // .placeholder on the sdpi-textfield throws (#199).
                     hourlyRateElement.value = '75';
-                    hourlyRateElement.placeholder = '75';
                 }
             } catch (error) {
                 console.error('Error updating form fields:', error);
