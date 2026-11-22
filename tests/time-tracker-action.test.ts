@@ -1528,6 +1528,22 @@ test('a press after a start whose save failed takes that entry instead of starti
   assert.equal(service.stopCalls[0]?.timeEntryId, 'entry-1');
 });
 
+test('a press a day after a start whose save failed starts a new entry', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: FROZEN_NOW });
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  await appear(tracker, fake);
+  const startedAt = await startWithFailedSave(fake, service, keyDown);
+
+  // Still running in Moneybird, but past the sync's pick-up window: likely forgotten.
+  mock.timers.tick(25 * HOUR_MS);
+  service.state.recentEntries = [remoteEntry({ id: 'entry-1', started_at: startedAt })];
+  service.state.startTimer = async () => ({ id: 'entry-2' }) as MoneybirdTimeEntry;
+  await keyDown();
+
+  assert.equal(service.state.startCount, 2);
+  assert.equal(fake.current().timeEntryId, 'entry-2');
+});
+
 test('a press after an unconfirmed start that Moneybird does not have starts a new entry', async () => {
   freezeClock();
   const { fake, service, tracker, keyDown } = setup({ ...configured });
