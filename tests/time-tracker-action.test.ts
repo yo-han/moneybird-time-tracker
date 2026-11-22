@@ -1044,26 +1044,30 @@ test('a stop still goes out when the entry cannot be read first', async () => {
   assert.equal(fake.current().isRunning, false);
 });
 
-test('a key with a request in flight is skipped, and does not hold up the lookup', async () => {
-  const { fake, service, tracker, keyDown } = setup({ ...configured });
-  let finishStart: (entry: MoneybirdTimeEntry) => void = () => {};
-  service.state.startTimer = () =>
-    new Promise(resolve => {
-      finishStart = resolve;
-    });
-  service.state.recentEntries = [remoteEntry()];
-  await appear(tracker, fake);
+test(
+  'a key with a request in flight is skipped, and does not hold up the lookup',
+  { timeout: 2000 },
+  async () => {
+    const { fake, service, tracker, keyDown } = setup({ ...configured });
+    let finishStart: (entry: MoneybirdTimeEntry) => void = () => {};
+    service.state.startTimer = () =>
+      new Promise(resolve => {
+        finishStart = resolve;
+      });
+    service.state.recentEntries = [remoteEntry()];
+    await appear(tracker, fake);
 
-  const press = keyDown();
-  await flushPromises();
-  // The start request hangs; the lookup must still finish.
-  await tracker.syncWithMoneybird();
+    const press = keyDown();
+    await flushPromises();
+    // The start request hangs; the lookup must still finish.
+    await tracker.syncWithMoneybird();
 
-  assert.equal(fake.current().timeEntryId, undefined);
-  finishStart({ id: 'entry-1' } as MoneybirdTimeEntry);
-  await press;
-  assert.equal(fake.current().timeEntryId, 'entry-1');
-});
+    assert.equal(fake.current().timeEntryId, undefined);
+    finishStart({ id: 'entry-1' } as MoneybirdTimeEntry);
+    await press;
+    assert.equal(fake.current().timeEntryId, 'entry-1');
+  }
+);
 
 test('a key that appears during a lookup gets its own lookup right after', async () => {
   const { fake, service, tracker } = setup({ ...configured, projectId: '5' });
@@ -1102,3 +1106,30 @@ test('a key whose administration changed during the lookup does not pick up the 
 
   assert.equal(fake.current().isRunning, undefined);
 });
+
+test(
+  'a key whose start is in flight still decides the description tie-break',
+  { timeout: 2000 },
+  async () => {
+    const { fake, service, tracker, keyDown } = setup({ ...configured, description: 'Review' });
+    const other = addKey(tracker, { ...configured, description: 'Meeting' });
+    let finishStart: (entry: MoneybirdTimeEntry) => void = () => {};
+    service.state.startTimer = () =>
+      new Promise(resolve => {
+        finishStart = resolve;
+      });
+    // Moneybird already created the entry of the start that is still in flight.
+    service.state.recentEntries = [remoteEntry({ id: 'entry-1', description: 'Review' })];
+    await appear(tracker, fake);
+    await appear(tracker, other);
+
+    const press = keyDown();
+    await flushPromises();
+    await tracker.syncWithMoneybird();
+
+    assert.equal(other.current().isRunning, undefined);
+    finishStart({ id: 'entry-1' } as MoneybirdTimeEntry);
+    await press;
+    assert.equal(fake.current().timeEntryId, 'entry-1');
+  }
+);

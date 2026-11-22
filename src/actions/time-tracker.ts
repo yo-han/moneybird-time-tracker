@@ -431,9 +431,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         continue;
       }
 
-      // A key with a press in flight is left to that press; its request (a start has no
-      // timeout) must not hold up the lookup for every other key.
-      const members = group.members.filter(member => !this.requestsInFlight.has(member.action.id));
+      const members = group.members;
       const service = this.createService(group.apiKey, group.administrationId);
       const knownIds = new Set(entries.map(entry => entry.id));
       // A running entry that started before the lookup period is not in the list: read it
@@ -462,7 +460,15 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         now,
         shownEntryIds
       );
-      const actions = new Map(members.map(member => [member.action.id, member.action]));
+      // Every key takes part in the decision (a key mid-start still wins its own entry by
+      // description), but a key with a press in flight is left to that press: its request
+      // (a start has no timeout) must not hold up the sync for every other key. Checked
+      // here, after the last await, so a press that started meanwhile is seen too.
+      const actions = new Map(
+        members
+          .filter(member => !this.requestsInFlight.has(member.action.id))
+          .map(member => [member.action.id, member.action])
+      );
 
       const tasks = [
         ...decision.endedElsewhere.map(({ keyId, entry }) => {
@@ -812,17 +818,23 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
     const endedAt = resolveAutoStopEndTime(settings.startTime, autoStopHours);
 
+    const apiKey = await this.resolveApiKey(settings);
+    const moneybirdService = apiKey
+      ? this.createService(apiKey, timerAdministrationOf(settings))
+      : undefined;
+    if (
+      moneybirdService &&
+      (await this.isStoppedElsewhere(moneybirdService, settings.timeEntryId))
+    ) {
+      // Stopped elsewhere while the key could not see it (asleep, offline): keep that end.
+      streamDeck.logger.info(`Timer ${settings.timeEntryId} was already stopped elsewhere`);
+      await this.resetToIdle(action, settings);
+      return;
+    }
+
     try {
-      const apiKey = await this.resolveApiKey(settings);
-      if (!apiKey) {
+      if (!moneybirdService) {
         throw new Error('No Moneybird API key configured');
-      }
-      const moneybirdService = this.createService(apiKey, timerAdministrationOf(settings));
-      if (await this.isStoppedElsewhere(moneybirdService, settings.timeEntryId)) {
-        // Stopped elsewhere while the key could not see it (asleep, offline): keep that end.
-        streamDeck.logger.info(`Timer ${settings.timeEntryId} was already stopped elsewhere`);
-        await this.resetToIdle(action, settings);
-        return;
       }
       await moneybirdService.stopTimer(settings.timeEntryId, endedAt);
     } catch (error) {
