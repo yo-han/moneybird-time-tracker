@@ -1481,3 +1481,23 @@ test('a confirmed start forgets an earlier unconfirmed one', async () => {
   assert.equal(fake.current().timeEntryId, 'orphan-1');
   assert.equal(fake.current().timerPickedUp, true);
 });
+
+test('a started timer whose save failed is found later as the key own start', async () => {
+  freezeClock();
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  await appear(tracker, fake);
+  service.state.startTimer = async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry;
+  const save = fake.action.setSettings;
+  fake.action.setSettings = async () => {
+    throw new Error('settings could not be saved');
+  };
+  await keyDown();
+  fake.action.setSettings = save;
+  assert.equal(fake.current().isRunning, undefined);
+
+  service.state.recentEntries = [remoteEntry({ id: 'entry-1', started_at: pressMinute() })];
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.current().timeEntryId, 'entry-1');
+  assert.equal('timerPickedUp' in fake.current(), false);
+});
