@@ -649,6 +649,22 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   ): Promise<void> {
     const instanceId = action.id;
 
+    // An earlier start of this key may have created an entry that the key does not show
+    // yet. Starting again would leave that one running unseen, so take it instead.
+    const earlierEntry = await this.findEarlierUnconfirmedStart(action, moneybirdService, settings);
+    if (earlierEntry) {
+      streamDeck.logger.info(
+        `Press on ${instanceId} took its earlier unconfirmed start ${earlierEntry.id}`
+      );
+      await this.holdStartedTimer(
+        action,
+        settings,
+        earlierEntry,
+        new Date(earlierEntry.started_at)
+      );
+      return;
+    }
+
     let timeEntry: MoneybirdTimeEntry | undefined;
     try {
       timeEntry = await moneybirdService.startTimer(settings, startedAt);
@@ -673,6 +689,18 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         `Start for ${instanceId} got no answer; found entry ${timeEntry.id} in Moneybird`
       );
     }
+
+    await this.holdStartedTimer(action, settings, timeEntry, startedAt);
+  }
+
+  /** Saves and shows a started entry as this key's running timer. */
+  private async holdStartedTimer(
+    action: TimerKeyAction,
+    settings: TimerSettings,
+    timeEntry: MoneybirdTimeEntry,
+    startedAt: Date
+  ): Promise<void> {
+    const instanceId = action.id;
 
     // This press got its entry, so an earlier start the key could not confirm is no longer
     // the key's last start: an entry from it that turns up later is treated as picked up.
@@ -721,6 +749,32 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       projectId: settings.projectId,
       description: settings.description || DEFAULT_TIME_ENTRY_DESCRIPTION,
     });
+  }
+
+  /**
+   * The entry of this key's last unconfirmed start, if Moneybird has it running and the
+   * press is for the same project and description; otherwise undefined, also when the
+   * lookup fails, so the press starts a new entry as it would without the record.
+   */
+  private async findEarlierUnconfirmedStart(
+    action: TimerKeyAction,
+    moneybirdService: TimerService,
+    settings: TimerSettings
+  ): Promise<MoneybirdTimeEntry | undefined> {
+    const unconfirmed = this.unconfirmedStarts.get(action.id);
+    if (
+      !unconfirmed ||
+      unconfirmed.projectId !== settings.projectId ||
+      unconfirmed.description !== (settings.description || DEFAULT_TIME_ENTRY_DESCRIPTION)
+    ) {
+      return undefined;
+    }
+    return this.findUnansweredStart(
+      action,
+      moneybirdService,
+      settings,
+      new Date(unconfirmed.startedAt)
+    );
   }
 
   /**
