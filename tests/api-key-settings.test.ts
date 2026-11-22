@@ -299,3 +299,22 @@ test('a running timer survives a key change', async () => {
   assert.equal(action.current().startTime, running.startTime);
   assert.equal(action.current().timeEntryId, 'entry-1');
 });
+
+test('an emptied global key field changes nothing', async () => {
+  const global = createStore({ apiKey: 'key-a' });
+  const action = createAction(configured);
+  const moneybird = createFakeMoneybird();
+
+  const { result, notices } = run(
+    action,
+    { event: 'apiKeyChanged', scope: 'global', apiKey: '   ' },
+    global.store,
+    moneybird
+  );
+
+  assert.equal(await result, false);
+  assert.equal(global.stored().apiKey, 'key-a');
+  assert.equal(action.saved.length, 0);
+  assert.deepEqual(notices, []);
+  assert.equal(moneybird.calls.length, 0);
+});
