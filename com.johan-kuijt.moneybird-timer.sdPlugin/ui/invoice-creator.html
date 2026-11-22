@@ -329,16 +329,16 @@
                 // sent only the form fields replaced those settings for a moment and
                 // dropped the running timer and the lists (#198). Only keep the local
                 // copy current, which updateDropdown() uses to restore a selection.
+                // valuechange is the component's own event, fired once the new value is
+                // set; on input or change a select or checkbox still has the old value.
                 const settingElements = document.querySelectorAll('[setting]');
                 settingElements.forEach(element => {
-                    const remember = () => {
+                    element.addEventListener('valuechange', () => {
                         currentSettings = {
                             ...currentSettings,
                             [element.getAttribute('setting')]: element.value
                         };
-                    };
-                    element.addEventListener('input', remember);
-                    element.addEventListener('change', remember);
+                    });
                 });
 
                 // API key inputs - check the key with Moneybird and load administrations
@@ -507,8 +507,7 @@
                 const parsedActionInfo = JSON.parse(actionInfo);
                 actionContext = parsedActionInfo?.context || null;
                 await streamDeckClient.connect(port, uuid, event, JSON.parse(info), parsedActionInfo);
-                
-                
+
                 initializeEventListeners();
                 await loadGlobalApiKey();
                 
