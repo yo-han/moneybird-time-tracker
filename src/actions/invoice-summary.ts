@@ -27,7 +27,7 @@ import { setActionDisplay } from '../utils/action-display.js';
 import { logError } from '../utils/error-logging.js';
 import { isKeyActionEvent } from '../utils/key-action.js';
 import { applyApiKeyEvent, type ApiKeyEventPayload } from '../utils/api-key-settings.js';
-import { migrateKeyCredentials, resolveApiKey } from '../utils/credentials.js';
+import { migrateKeyCredentials, resolveApiKeyFromStore } from '../utils/credentials.js';
 import type { GlobalSettingsStore } from '../utils/global-settings.js';
 import { notifyPropertyInspector, pluginGlobalSettings } from '../utils/plugin-global-settings.js';
 
@@ -63,7 +63,7 @@ export class InvoiceSummary extends SingletonAction<InvoiceSettings> {
   }
 
   private async updateSummary(action: SummaryAction, settings: InvoiceSettings): Promise<void> {
-    const apiKey = resolveApiKey(settings, await this.globalSettings.get());
+    const apiKey = await resolveApiKeyFromStore(settings, this.globalSettings, streamDeck.logger);
     if (!apiKey || !settings.administrationId || !settings.contactId) {
       const displayTitle = settings.displayTitle || 'Not configured';
       await setActionDisplay(action, displayTitle, this.getImagePath('default'));

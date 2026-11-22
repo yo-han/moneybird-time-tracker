@@ -5,6 +5,7 @@ import {
   hashApiKey,
   migrateKeyCredentials,
   resolveApiKey,
+  resolveApiKeyFromStore,
 } from '../src/utils/credentials.js';
 import { GlobalSettingsStore } from '../src/utils/global-settings.js';
 import type { PluginGlobalSettings, TimerSettings } from '../src/types/moneybird.js';
@@ -161,9 +162,10 @@ test('migrateKeyCredentials keeps the original settings when the global settings
     },
     async save() {},
   });
+  let saves = 0;
   const action = {
     async setSettings() {
-      throw new Error('should not save');
+      saves++;
     },
   };
 
@@ -172,5 +174,21 @@ test('migrateKeyCredentials keeps the original settings when the global settings
   });
 
   assert.equal(migrated, runningKey);
+  assert.equal(saves, 0);
   assert.equal(errors.length, 1);
+});
+
+test('resolveApiKeyFromStore falls back to the own key when the global settings fail', async () => {
+  const errors: unknown[][] = [];
+  const store = new GlobalSettingsStore({
+    async load() {
+      throw new Error('not connected');
+    },
+    async save() {},
+  });
+  const logger = { error: (...args: unknown[]) => errors.push(args) };
+
+  assert.equal(await resolveApiKeyFromStore({ apiKey: 'own' }, store, logger), 'own');
+  assert.equal(await resolveApiKeyFromStore({}, store, logger), undefined);
+  assert.equal(errors.length, 2);
 });

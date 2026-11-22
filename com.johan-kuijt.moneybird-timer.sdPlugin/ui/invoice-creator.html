@@ -92,6 +92,7 @@
         let isLoading = false;
         let administrationsRequested = false;
         let ownApiKeyEnabled = false;
+        let actionContext = null;
 
         function setLoading(loading) {
             isLoading = loading;
@@ -287,6 +288,10 @@
                 checkbox.value = ownApiKeyEnabled;
             }
             document.getElementById('ownApiKeyItem')?.classList.toggle('hidden', !ownApiKeyEnabled);
+            const ownField = document.getElementById('apiKey');
+            if (ownField && !ownApiKeyEnabled && !settings.apiKey && ownField.value) {
+                ownField.value = '';
+            }
 
             const warning = document.getElementById('runningKeyWarning');
             if (warning) {
@@ -377,8 +382,10 @@
                         ownApiKeyEnabled = enabled;
                         document.getElementById('ownApiKeyItem')?.classList.toggle('hidden', !enabled);
                         if (!enabled) {
-                            const ownField = document.getElementById('apiKey');
-                            if (ownField) ownField.value = '';
+                            // The plugin removes the own key (or refuses while a timer runs
+                            // that the shared key cannot reach). The field is cleared once
+                            // the plugin's settings arrive, not here: the component would
+                            // save the empty value right away.
                             hideError('apiKey');
                             sendApiKeyChange('key', '');
                         }
@@ -484,8 +491,22 @@
         // Answers from the plugin about an API key change.
         streamDeckClient.sendToPropertyInspector.subscribe(event => {
             const message = event?.payload || {};
+            // An answer that arrives after switching to another key belongs to that key.
+            if (message.actionId && actionContext && message.actionId !== actionContext) {
+                return;
+            }
             const fieldId = message.scope === 'key' ? 'apiKey' : 'globalApiKey';
             if (message.event === 'apiKeyRejected') {
+                if (message.scope === 'key') {
+                    // Show the own key again, also after a refused untick.
+                    const ownField = document.getElementById('apiKey');
+                    if (ownField?.value && !ownApiKeyEnabled) {
+                        ownApiKeyEnabled = true;
+                        const checkbox = document.getElementById('apiKeyIsOverride');
+                        if (checkbox) checkbox.value = true;
+                    }
+                    document.getElementById('ownApiKeyItem')?.classList.remove('hidden');
+                }
                 showError(fieldId, message.message || 'Moneybird rejected this API key');
             } else if (message.event === 'apiKeyAccepted') {
                 hideError(fieldId);
@@ -494,7 +515,9 @@
 
         window.connectElgatoStreamDeckSocket = async function(port, uuid, event, info, actionInfo) {
             try {
-                await streamDeckClient.connect(port, uuid, event, JSON.parse(info), JSON.parse(actionInfo));
+                const parsedActionInfo = JSON.parse(actionInfo);
+                actionContext = parsedActionInfo?.context || null;
+                await streamDeckClient.connect(port, uuid, event, JSON.parse(info), parsedActionInfo);
                 
                 isConnected = true;
                 

@@ -1,7 +1,7 @@
 import { MoneybirdService } from '../services/moneybird.js';
 import { InvoiceSettings, contactToJson, JsonValue } from '../types/moneybird.js';
 import { logError } from './error-logging.js';
-import { resolveApiKey } from './credentials.js';
+import { resolveApiKeyFromStore } from './credentials.js';
 import type { GlobalSettingsStore } from './global-settings.js';
 import { rememberDefaultAdministration, type DependentList } from './api-key-settings.js';
 
@@ -52,7 +52,7 @@ export async function applyInvoiceAdministrationChange(
 ): Promise<boolean> {
   const { logger, store, createService = defaultCreateService } = dependencies;
   const currentSettings = await action.getSettings();
-  const apiKey = resolveApiKey(currentSettings, await store.get());
+  const apiKey = await resolveApiKeyFromStore(currentSettings, store, logger);
 
   logger.debug(`handleAdministrationChange called with administrationId: ${administrationId}`);
 

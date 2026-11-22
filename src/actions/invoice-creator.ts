@@ -28,7 +28,7 @@ import { logError } from '../utils/error-logging.js';
 import { isKeyActionEvent } from '../utils/key-action.js';
 import { runExclusivePerKey } from '../utils/in-flight.js';
 import { applyApiKeyEvent, type ApiKeyEventPayload } from '../utils/api-key-settings.js';
-import { migrateKeyCredentials, resolveApiKey } from '../utils/credentials.js';
+import { migrateKeyCredentials, resolveApiKeyFromStore } from '../utils/credentials.js';
 import type { GlobalSettingsStore } from '../utils/global-settings.js';
 import { notifyPropertyInspector, pluginGlobalSettings } from '../utils/plugin-global-settings.js';
 
@@ -59,7 +59,7 @@ export class InvoiceCreator extends SingletonAction<InvoiceSettings> {
   }
 
   private async resolveApiKey(settings: InvoiceSettings): Promise<string | undefined> {
-    return resolveApiKey(settings, await this.globalSettings.get());
+    return resolveApiKeyFromStore(settings, this.globalSettings, streamDeck.logger);
   }
 
   private async isConfigured(settings: InvoiceSettings): Promise<boolean> {

@@ -34,7 +34,7 @@ import {
   type ApiKeyEventPayload,
   type DependentList,
 } from '../utils/api-key-settings.js';
-import { migrateKeyCredentials, resolveApiKey } from '../utils/credentials.js';
+import { migrateKeyCredentials, resolveApiKeyFromStore } from '../utils/credentials.js';
 import type { GlobalSettingsStore } from '../utils/global-settings.js';
 import { notifyPropertyInspector, pluginGlobalSettings } from '../utils/plugin-global-settings.js';
 
@@ -105,7 +105,7 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   }
 
   private async resolveApiKey(settings: TimerSettings): Promise<string | undefined> {
-    return resolveApiKey(settings, await this.globalSettings.get());
+    return resolveApiKeyFromStore(settings, this.globalSettings, streamDeck.logger);
   }
 
   private getImagePath(type: 'default' | 'active' | 'error'): string {

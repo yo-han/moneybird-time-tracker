@@ -14,11 +14,36 @@ export type GlobalSettingsBackend = {
  * run a read-modify-write (the API key migration); without the queue two of them could
  * both see "no global key yet" and the second would overwrite the first.
  */
+export class GlobalSettingsLoadTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Global settings did not arrive within ${timeoutMs} ms`);
+    this.name = 'GlobalSettingsLoadTimeoutError';
+  }
+}
+
+/**
+ * Stream Deck answers getGlobalSettings with an event and the SDK waits for it without a
+ * timeout. Every key reads the global settings, so a reply that never comes would block
+ * them all, including stopping a timer.
+ */
+const DEFAULT_LOAD_TIMEOUT_MS = 5000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new GlobalSettingsLoadTimeoutError(timeoutMs)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 export class GlobalSettingsStore {
   private cached: PluginGlobalSettings | undefined;
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly backend: GlobalSettingsBackend) {}
+  constructor(
+    private readonly backend: GlobalSettingsBackend,
+    private readonly loadTimeoutMs: number = DEFAULT_LOAD_TIMEOUT_MS
+  ) {}
 
   get(): Promise<PluginGlobalSettings> {
     return this.enqueue(() => this.current());
@@ -46,7 +71,8 @@ export class GlobalSettingsStore {
 
   private async current(): Promise<PluginGlobalSettings> {
     if (!this.cached) {
-      this.cached = { ...(await this.backend.load()) };
+      // A failed or timed out load is not cached, so the next call tries again.
+      this.cached = { ...(await withTimeout(this.backend.load(), this.loadTimeoutMs)) };
     }
     return this.cached;
   }

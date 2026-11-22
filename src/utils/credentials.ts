@@ -18,6 +18,25 @@ export function resolveApiKey(
   return nonEmpty(settings.apiKey) ?? nonEmpty(global.apiKey);
 }
 
+/**
+ * Resolves the API key for a key press or refresh. When the global settings cannot be read,
+ * the key falls back to its own API key (if any) instead of failing, and the failure is
+ * logged.
+ */
+export async function resolveApiKeyFromStore(
+  settings: Pick<KeyCredentials, 'apiKey'>,
+  store: GlobalSettingsStore,
+  logger: ErrorLogger
+): Promise<string | undefined> {
+  let global: PluginGlobalSettings = {};
+  try {
+    global = await store.get();
+  } catch (error) {
+    logError(logger, "Could not read the global settings; using this key's own API key", error);
+  }
+  return resolveApiKey(settings, global);
+}
+
 /** Hash used to recognise the adopted key later without storing a second copy of it. */
 export function hashApiKey(apiKey: string): string {
   return createHash('sha256').update(apiKey.trim()).digest('hex');

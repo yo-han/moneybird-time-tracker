@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { GlobalSettingsStore } from '../src/utils/global-settings.js';
+import {
+  GlobalSettingsLoadTimeoutError,
+  GlobalSettingsStore,
+} from '../src/utils/global-settings.js';
 import type { PluginGlobalSettings } from '../src/types/moneybird.js';
 
 function createBackend(initial: PluginGlobalSettings = {}) {
@@ -92,4 +95,22 @@ test('a failed save rejects that update, keeps the old value and does not block 
 
   await store.update(current => ({ ...current, apiKey: 'next-key' }));
   assert.equal(fake.stored().apiKey, 'next-key');
+});
+
+test('a load that never answers times out, is not cached, and is tried again', async () => {
+  let loads = 0;
+  const store = new GlobalSettingsStore(
+    {
+      load() {
+        loads++;
+        return loads === 1 ? new Promise(() => {}) : Promise.resolve({ apiKey: 'late-key' });
+      },
+      async save() {},
+    },
+    20
+  );
+
+  await assert.rejects(store.get(), GlobalSettingsLoadTimeoutError);
+  assert.equal((await store.get()).apiKey, 'late-key');
+  assert.equal(loads, 2);
 });

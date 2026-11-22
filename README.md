@@ -74,7 +74,13 @@ key` and enter that token. Untick it to go back to the shared token.
 
 Keys configured before this version keep working: the first token found becomes the shared
 token, and keys with the same token switch to it. Keys with a different token keep it as their
-own.
+own. A key that still carries that first token follows the shared token later, also after you
+replaced it.
+
+Stop running timers before you switch the shared token to another Moneybird account. A timer
+key whose property inspector is open refuses a token that cannot reach its running entry, but
+timers on other keys are stopped with the new token, which cannot reach an entry in the old
+account.
 
 ### Configure Actions in Stream Deck
 

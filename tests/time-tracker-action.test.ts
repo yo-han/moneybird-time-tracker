@@ -283,12 +283,17 @@ test('a key without an API key of its own starts the timer with the global key',
 });
 
 test('a key without any API key shows that it needs configuration', async () => {
-  const { service, keyDown } = setup({ administrationId: '1', projectId: '2', userId: '3' });
+  const { fake, service, keyDown } = setup({
+    administrationId: '1',
+    projectId: '2',
+    userId: '3',
+  });
 
   await keyDown();
 
   assert.equal(service.state.startCount, 0);
   assert.deepEqual(service.usedApiKeys, []);
+  assert.equal(fake.titles.at(-1), 'Config needed');
 });
 
 test('a key with its own key keeps using it next to a global key', async () => {
