@@ -3,7 +3,12 @@ import { afterEach, mock, test } from 'node:test';
 import type { KeyDownEvent, WillAppearEvent, WillDisappearEvent } from '@elgato/streamdeck';
 import { TimeTracker, type CreateTimerService } from '../src/actions/time-tracker.js';
 import { MoneybirdApiError } from '../src/services/moneybird/error-handler.js';
-import type { MoneybirdTimeEntry, TimerSettings } from '../src/types/moneybird.js';
+import { GlobalSettingsStore } from '../src/utils/global-settings.js';
+import type {
+  MoneybirdTimeEntry,
+  PluginGlobalSettings,
+  TimerSettings,
+} from '../src/types/moneybird.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -38,6 +43,7 @@ function createFakeAction(initial: TimerSettings) {
 
 function createFakeService() {
   const stopCalls: StopCall[] = [];
+  const usedApiKeys: string[] = [];
   const state: {
     startTimer: () => Promise<MoneybirdTimeEntry>;
     stopTimer: () => Promise<MoneybirdTimeEntry>;
@@ -48,22 +54,25 @@ function createFakeService() {
     startCount: 0,
   };
 
-  const factory: CreateTimerService = () => ({
-    getAdministrations: async () => [],
-    getProjects: async () => [],
-    getUsers: async () => [],
-    getContacts: async () => [],
-    startTimer: async () => {
-      state.startCount++;
-      return state.startTimer();
-    },
-    stopTimer: async (timeEntryId: string, endedAt: Date = new Date()) => {
-      stopCalls.push({ timeEntryId, endedAt });
-      return state.stopTimer();
-    },
-  });
+  const factory: CreateTimerService = apiKey => {
+    usedApiKeys.push(apiKey);
+    return {
+      getAdministrations: async () => [],
+      getProjects: async () => [],
+      getUsers: async () => [],
+      getContacts: async () => [],
+      startTimer: async () => {
+        state.startCount++;
+        return state.startTimer();
+      },
+      stopTimer: async (timeEntryId: string, endedAt: Date = new Date()) => {
+        stopCalls.push({ timeEntryId, endedAt });
+        return state.stopTimer();
+      },
+    };
+  };
 
-  return { factory, state, stopCalls };
+  return { factory, state, stopCalls, usedApiKeys };
 }
 
 const configured: TimerSettings = {
@@ -85,10 +94,26 @@ function runningSince(startTime: Date, extra: Partial<TimerSettings> = {}): Time
 
 const trackers: Array<{ tracker: TimeTracker; action: unknown }> = [];
 
-function setup(settings: TimerSettings) {
+function createGlobalStore(initial: PluginGlobalSettings = {}) {
+  let stored: PluginGlobalSettings = { ...initial };
+  return {
+    stored: () => stored,
+    store: new GlobalSettingsStore({
+      async load() {
+        return { ...stored };
+      },
+      async save(next) {
+        stored = { ...next };
+      },
+    }),
+  };
+}
+
+function setup(settings: TimerSettings, globalSettings: PluginGlobalSettings = {}) {
   const fake = createFakeAction(settings);
   const service = createFakeService();
-  const tracker = new TimeTracker(service.factory);
+  const global = createGlobalStore(globalSettings);
+  const tracker = new TimeTracker(service.factory, global.store);
   trackers.push({ tracker, action: fake.action });
 
   const keyDown = () =>
@@ -97,7 +122,7 @@ function setup(settings: TimerSettings) {
       payload: { settings: fake.current() },
     } as unknown as KeyDownEvent<TimerSettings>);
 
-  return { fake, service, tracker, keyDown };
+  return { fake, service, tracker, keyDown, global };
 }
 
 afterEach(async () => {
@@ -242,4 +267,77 @@ test('a successful auto-stop resets the key', async () => {
   assert.equal(service.stopCalls.length, 1);
   assert.equal(fake.current().isRunning, false);
   assert.ok(fake.titles.includes('Auto-stopped'));
+});
+
+test('a key without an API key of its own starts the timer with the global key', async () => {
+  const { fake, service, keyDown } = setup(
+    { administrationId: '1', projectId: '2', userId: '3' },
+    { apiKey: 'global-key' }
+  );
+
+  await keyDown();
+
+  assert.equal(service.state.startCount, 1);
+  assert.deepEqual(service.usedApiKeys, ['global-key']);
+  assert.equal(fake.current().isRunning, true);
+});
+
+test('a key without any API key shows that it needs configuration', async () => {
+  const { fake, service, keyDown } = setup({
+    administrationId: '1',
+    projectId: '2',
+    userId: '3',
+  });
+
+  await keyDown();
+
+  assert.equal(service.state.startCount, 0);
+  assert.deepEqual(service.usedApiKeys, []);
+  assert.equal(fake.titles.at(-1), 'Config needed');
+});
+
+test('a key with its own key keeps using it next to a global key', async () => {
+  const { service, keyDown } = setup(
+    { ...configured, apiKey: 'own-key', apiKeyIsOverride: true },
+    { apiKey: 'global-key' }
+  );
+
+  await keyDown();
+
+  assert.deepEqual(service.usedApiKeys, ['own-key']);
+});
+
+test('a running key that appears hands its API key to the global settings and keeps running', async () => {
+  const start = new Date(Date.now() - 60_000);
+  const { fake, tracker, global } = setup(runningSince(start));
+
+  await tracker.onWillAppear({
+    action: fake.action,
+    payload: { settings: fake.current() },
+  } as unknown as WillAppearEvent<TimerSettings>);
+
+  assert.equal(global.stored().apiKey, 'key');
+  assert.equal('apiKey' in fake.current(), false);
+  assert.equal(fake.current().isRunning, true);
+  assert.equal(fake.current().timeEntryId, 'entry-1');
+  assert.equal(fake.current().startTime, start.toISOString());
+});
+
+test('auto-stop stops the entry with the global key', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const start = new Date(Date.now() - 5 * HOUR_MS);
+  const { fake, service, tracker } = setup(
+    runningSince(start, { apiKey: '', autoStopEnabled: true, autoStopHours: 4 }),
+    { apiKey: 'global-key' }
+  );
+
+  await tracker.onWillAppear({
+    action: fake.action,
+    payload: { settings: fake.current() },
+  } as unknown as WillAppearEvent<TimerSettings>);
+  mock.timers.tick(1_000);
+  await flushPromises();
+
+  assert.equal(service.stopCalls.length, 1);
+  assert.deepEqual(service.usedApiKeys, ['global-key']);
 });

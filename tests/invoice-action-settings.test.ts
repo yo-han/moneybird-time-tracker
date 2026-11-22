@@ -1,10 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  applyInvoiceAdministrationChange,
-  applyInvoiceGlobalSettings,
-} from '../src/utils/invoice-action-settings.js';
-import type { InvoiceSettings } from '../src/types/moneybird.js';
+import { applyInvoiceAdministrationChange } from '../src/utils/invoice-action-settings.js';
+import { GlobalSettingsStore } from '../src/utils/global-settings.js';
+import type { InvoiceSettings, PluginGlobalSettings } from '../src/types/moneybird.js';
 
 type MockAction = {
   action: {
@@ -42,7 +40,31 @@ function createLogger() {
   };
 }
 
-test('applyInvoiceAdministrationChange returns false when required settings are missing', async () => {
+function createStore(initial: PluginGlobalSettings = {}) {
+  let stored: PluginGlobalSettings = { ...initial };
+  return {
+    stored: () => stored,
+    store: new GlobalSettingsStore({
+      async load() {
+        return { ...stored };
+      },
+      async save(next) {
+        stored = { ...next };
+      },
+    }),
+  };
+}
+
+const twoContacts = () => ({
+  async getContacts() {
+    return [
+      { id: 'c1', company_name: 'Acme', firstname: '', lastname: '' },
+      { id: 'c2', company_name: '', firstname: 'Jane', lastname: 'Doe' },
+    ];
+  },
+});
+
+test('applyInvoiceAdministrationChange returns false when no API key is available', async () => {
   const action = createAction({
     apiKey: '',
     administrationId: '',
@@ -51,6 +73,7 @@ test('applyInvoiceAdministrationChange returns false when required settings are 
 
   const updated = await applyInvoiceAdministrationChange(action.action, 'admin-1', {
     logger: createLogger(),
+    store: createStore().store,
   });
 
   assert.equal(updated, false);
@@ -66,17 +89,8 @@ test('applyInvoiceAdministrationChange updates contacts and clears selected cont
 
   const updated = await applyInvoiceAdministrationChange(action.action, 'admin-1', {
     logger: createLogger(),
-    createService: () => ({
-      async getContacts() {
-        return [
-          { id: 'c1', company_name: 'Acme', firstname: '', lastname: '' },
-          { id: 'c2', company_name: '', firstname: 'Jane', lastname: 'Doe' },
-        ];
-      },
-      async getAdministrations() {
-        return [];
-      },
-    }),
+    store: createStore().store,
+    createService: twoContacts,
   });
 
   assert.equal(updated, true);
@@ -88,61 +102,21 @@ test('applyInvoiceAdministrationChange updates contacts and clears selected cont
   assert.equal(typeof saved?.contacts?.c2, 'object');
 });
 
-test('applyInvoiceGlobalSettings stores administrations for a valid API key', async () => {
-  const action = createAction({
-    apiKey: '',
-    administrationId: '',
-    contactId: '',
-  });
+test('applyInvoiceAdministrationChange uses the global key and remembers the administration as default', async () => {
+  const action = createAction({ administrationId: '', contactId: '' });
+  const global = createStore({ apiKey: 'global-key' });
+  const usedKeys: string[] = [];
 
-  const updated = await applyInvoiceGlobalSettings(action.action, 'new-key', {
+  const updated = await applyInvoiceAdministrationChange(action.action, 'admin-1', {
     logger: createLogger(),
-    createService: () => ({
-      async getAdministrations() {
-        return [
-          { id: 'a1', name: 'Main' },
-          { id: 'a2', name: 'Second' },
-        ];
-      },
-      async getContacts() {
-        return [];
-      },
-    }),
+    store: global.store,
+    createService: apiKey => {
+      usedKeys.push(apiKey);
+      return twoContacts();
+    },
   });
 
   assert.equal(updated, true);
-  const saved = action.getLastSettings();
-  assert.ok(saved);
-  assert.equal(saved?.apiKey, 'new-key');
-  assert.equal(typeof saved?.administrations?.a1, 'object');
-  assert.equal(typeof saved?.administrations?.a2, 'object');
-});
-
-test('applyInvoiceGlobalSettings clears options on fetch failure', async () => {
-  const action = createAction({
-    apiKey: '',
-    administrationId: '',
-    contactId: '',
-    administrations: { old: { id: 'old' } },
-    contacts: { old: { id: 'old' } },
-  });
-
-  const updated = await applyInvoiceGlobalSettings(action.action, 'new-key', {
-    logger: createLogger(),
-    createService: () => ({
-      async getAdministrations() {
-        throw new Error('boom');
-      },
-      async getContacts() {
-        return [];
-      },
-    }),
-  });
-
-  assert.equal(updated, false);
-  const saved = action.getLastSettings();
-  assert.ok(saved);
-  assert.equal(saved?.apiKey, 'new-key');
-  assert.deepEqual(saved?.administrations, {});
-  assert.deepEqual(saved?.contacts, {});
+  assert.deepEqual(usedKeys, ['global-key']);
+  assert.equal(global.stored().defaultAdministrationId, 'admin-1');
 });

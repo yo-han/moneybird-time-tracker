@@ -60,24 +60,46 @@ The plugin includes three actions:
 - Contacts
 5. Copy the token.
 
+### API Token for All Keys
+
+The API token is entered once and shared by every key of this plugin. Paste it into the
+`API Key` field of any key; the plugin checks it with Moneybird before saving it, and shows an
+error under the field when Moneybird rejects it. Rotating the token there updates all keys.
+
+The administration you pick last is preselected for the next key you add. Each key can still
+choose another administration.
+
+For a key that should use another Moneybird account, tick `Use a different API key for this
+key` and enter that token. Untick it to go back to the shared token.
+
+Keys configured before this version keep working: the first token found becomes the shared
+token, and keys with the same token switch to it. Keys with a different token keep it as their
+own. A key that still carries that first token follows the shared token later, also after you
+replaced it.
+
+Stop running timers before you switch the shared token to another Moneybird account. A timer
+key whose property inspector is open refuses a token that cannot reach its running entry, but
+timers on other keys are stopped with the new token, which cannot reach an entry in the old
+account.
+
 ### Configure Actions in Stream Deck
 
 `Time Tracker`
 1. Add `Time Tracker` to a key.
-2. Set API token and administration.
+2. Set API token (once for all keys) and administration.
 3. Select project and user.
 4. Optional: default description, billable flag, auto-stop settings.
 
 `Invoice Creator`
 1. Add `Invoice Creator` to a key.
-2. Set API token and administration.
+2. Set API token (once for all keys) and administration.
 3. Select customer/contact.
 4. Configure hourly rate and period.
 5. Optional: custom title and workflow.
 
 `Invoice Summary`
 1. Add `Invoice Summary` to a key.
-2. Set API token and administration.
+2. Set API token (once for all keys) and administration.
 3. Select customer/contact.
 4. Configure period and optional hourly rate.
 5. Optional: custom title.

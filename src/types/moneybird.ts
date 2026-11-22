@@ -3,8 +3,32 @@ export type JsonValue =
   string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue | undefined };
 
-export interface TimerSettings extends JsonObject {
-  apiKey: string;
+/**
+ * Plugin wide settings, shared by every key.
+ * - `apiKey`: the Moneybird API key that keys use unless they have their own.
+ * - `defaultAdministrationId`: preselected in the property inspector of a new key.
+ * - `adoptedApiKeyHash`: salted scrypt hash of the per-key API key that became the global key when
+ *   upgrading. A key that still carries that old value is migrated even after the global
+ *   key was rotated, instead of being mistaken for an intentional override.
+ */
+export interface PluginGlobalSettings extends JsonObject {
+  apiKey?: string;
+  defaultAdministrationId?: string;
+  adoptedApiKeyHash?: string;
+}
+
+/**
+ * Credentials stored per key. `apiKey` is only set when the key uses another API key than
+ * the global one (`apiKeyIsOverride`), or when it was configured before the global key
+ * existed and has not been migrated yet.
+ */
+export interface KeyCredentials extends JsonObject {
+  apiKey?: string;
+  apiKeyIsOverride?: boolean;
+  administrationId: string;
+}
+
+export interface TimerSettings extends KeyCredentials {
   administrationId: string;
   projectId: string;
   contactId?: string;
@@ -23,8 +47,7 @@ export interface TimerSettings extends JsonObject {
   users?: Record<string, JsonValue>;
 }
 
-export interface InvoiceSettings extends JsonObject {
-  apiKey: string;
+export interface InvoiceSettings extends KeyCredentials {
   administrationId: string;
   contactId: string;
   periodType?: 'month' | 'quarter' | 'year';
