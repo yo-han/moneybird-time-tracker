@@ -699,9 +699,14 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         timeEntryId: timeEntry.id,
       });
       const latest = await this.readSettingsAfterFailure(action);
+      // The id check guards against settings written outside the key's queue (the property
+      // inspector saves its own copy); every writer inside the queue waits for this press.
       if (latest?.isRunning && latest.timeEntryId === timeEntry.id) {
-        // Only the display failed: the key holds the entry, and the sync leaves a running
-        // key alone. Show it running again, which also schedules its refresh and auto-stop.
+        // Only the display failed: the key holds the entry, and the sync never picks up an
+        // entry for a running key, so nothing else would schedule its auto-stop. Schedule
+        // it now, apart from the redraw, which may fail again; the redraw after the error
+        // flash restarts the refresh and replaces this auto-stop with the same one.
+        this.scheduleAutoStop(action, latest);
         await this.flashError(action, () => this.showRunning(action, latest));
         return;
       }

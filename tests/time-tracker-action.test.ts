@@ -1525,20 +1525,7 @@ test('a started timer whose display failed after the save shows running and auto
   await appear(tracker, fake);
   service.state.startTimer = async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry;
   // The save succeeds; the first redraw after it fails once.
-  const save = fake.action.setSettings;
-  const draw = fake.action.setImage;
-  let failNextImage = false;
-  fake.action.setSettings = async next => {
-    await save(next);
-    failNextImage = true;
-  };
-  fake.action.setImage = async image => {
-    if (failNextImage) {
-      failNextImage = false;
-      throw new Error('image could not be set');
-    }
-    await draw(image);
-  };
+  failAfterSave(fake, { failImages: [1] });
   await keyDown();
   assert.equal(fake.current().isRunning, true);
   assert.equal(fake.current().timeEntryId, 'entry-1');
@@ -1555,36 +1542,101 @@ test('a started timer whose display failed after the save shows running and auto
   assert.equal(service.stopCalls[0]?.timeEntryId, 'entry-1');
 });
 
-test('a start whose display and settings read both failed falls back to the idle key', async () => {
-  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: FROZEN_NOW });
-  const { fake, service, tracker, keyDown } = setup({ ...configured });
-  await appear(tracker, fake);
-  service.state.startTimer = async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry;
+/**
+ * Lets the save succeed and then fails the given redraws after it (1 = the first `setImage`
+ * after the save) and, with `failRead`, the first settings read after it.
+ */
+function failAfterSave(
+  fake: ReturnType<typeof createFakeAction>,
+  { failImages, failRead = false }: { failImages: number[]; failRead?: boolean }
+) {
   const save = fake.action.setSettings;
   const draw = fake.action.setImage;
   const read = fake.action.getSettings;
-  let failAfterSave = false;
+  let saved = false;
+  let imagesAfterSave = 0;
+  let readFailed = false;
   fake.action.setSettings = async next => {
     await save(next);
-    failAfterSave = true;
+    saved = true;
   };
   fake.action.setImage = async image => {
-    if (failAfterSave) {
+    if (saved && failImages.includes(++imagesAfterSave)) {
       throw new Error('image could not be set');
     }
     await draw(image);
   };
   fake.action.getSettings = async () => {
-    if (failAfterSave) {
-      failAfterSave = false;
+    if (saved && failRead && !readFailed) {
+      readFailed = true;
       throw new Error('settings could not be read');
     }
     return read();
   };
+}
+
+test('a started timer whose redraw keeps failing after the save still auto-stops', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: FROZEN_NOW });
+  const { fake, service, tracker, keyDown } = setup({
+    ...configured,
+    autoStopEnabled: true,
+    autoStopHours: 4,
+  });
+  await appear(tracker, fake);
+  service.state.startTimer = async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry;
+  // 1: the redraw after the save, 2: the error image, 3: the redraw after the flash.
+  failAfterSave(fake, { failImages: [1, 3] });
+
+  await keyDown();
+  mock.timers.tick(2_000);
+  await flushPromises();
+  assert.equal(fake.current().isRunning, true);
+
+  mock.timers.tick(4 * HOUR_MS);
+  await flushPromises();
+  assert.equal(service.stopCalls.length, 1);
+  assert.equal(service.stopCalls[0]?.timeEntryId, 'entry-1');
+});
+
+test('a started timer whose display failed keeps its auto-stop through a failed stop during the flash', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: FROZEN_NOW });
+  const { fake, service, tracker, keyDown } = setup({
+    ...configured,
+    autoStopEnabled: true,
+    autoStopHours: 4,
+  });
+  await appear(tracker, fake);
+  service.state.startTimer = async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry;
+  failAfterSave(fake, { failImages: [1] });
+  await keyDown();
+
+  // Pressed during the error flash; the stop fails for now.
+  service.state.stopTimer = async () => {
+    throw new MoneybirdApiError('Server error: 503', 503);
+  };
+  await keyDown();
+  assert.equal(service.stopCalls.length, 1);
+  service.state.stopTimer = async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry;
+
+  mock.timers.tick(4 * HOUR_MS);
+  await flushPromises();
+  assert.equal(service.stopCalls.length, 2);
+  assert.equal(service.stopCalls[1]?.timeEntryId, 'entry-1');
+});
+
+test('a start whose display and settings read both failed ends idle, as before', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: FROZEN_NOW });
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  await appear(tracker, fake);
+  service.state.startTimer = async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry;
+  failAfterSave(fake, { failImages: [1], failRead: true });
 
   await keyDown();
   assert.equal(fake.titles.at(-1), 'Error');
   mock.timers.tick(2_000);
   await flushPromises();
+  // Accepted gap: without the settings the key cannot tell a failed display from a failed
+  // save, so it shows idle although the settings say running.
   assert.equal(fake.titles.at(-1), 'Start');
+  assert.equal(fake.current().isRunning, true);
 });
