@@ -53,6 +53,8 @@ function createFakeService() {
   const stopCalls: StopCall[] = [];
   const usedApiKeys: string[] = [];
   const usedAdministrationIds: Array<string | undefined> = [];
+  const lookups: Array<{ apiKey: string; administrationId?: string; userId: string }> = [];
+  const entryFetches: string[] = [];
   const state: {
     startTimer: () => Promise<MoneybirdTimeEntry>;
     stopTimer: () => Promise<MoneybirdTimeEntry>;
@@ -63,6 +65,12 @@ function createFakeService() {
     administrations?: Array<{ id: string; name: string }>;
     projects?: Array<{ id: string; name: string }>;
     users?: Array<{ id: string; name: string; email: string }>;
+    recentEntries?: MoneybirdTimeEntry[];
+    lookupError?: Error;
+    lookupErrorForUser?: string;
+    beforeLookup?: () => Promise<void>;
+    timeEntryError?: Error;
+    timeEntry?: Partial<MoneybirdTimeEntry>;
   } = {
     startTimer: async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry,
     stopTimer: async () => ({ id: 'entry-1' }) as MoneybirdTimeEntry,
@@ -84,6 +92,24 @@ function createFakeService() {
       },
       getUsers: async () => state.users ?? [],
       getContacts: async () => [],
+      getRecentTimeEntries: async (userId: string) => {
+        lookups.push({ apiKey, administrationId, userId });
+        await state.beforeLookup?.();
+        if (state.lookupError) {
+          throw state.lookupError;
+        }
+        if (state.lookupErrorForUser === userId) {
+          throw new MoneybirdApiError('Server error: 503', 503);
+        }
+        return state.recentEntries ?? [];
+      },
+      getTimeEntry: async (timeEntryId: string) => {
+        entryFetches.push(timeEntryId);
+        if (state.timeEntryError) {
+          throw state.timeEntryError;
+        }
+        return { id: timeEntryId, ended_at: null, ...state.timeEntry } as MoneybirdTimeEntry;
+      },
       startTimer: async () => {
         state.startCount++;
         return state.startTimer();
@@ -95,7 +121,7 @@ function createFakeService() {
     };
   };
 
-  return { factory, state, stopCalls, usedApiKeys, usedAdministrationIds };
+  return { factory, state, stopCalls, usedApiKeys, usedAdministrationIds, lookups, entryFetches };
 }
 
 const configured: TimerSettings = {
@@ -132,14 +158,23 @@ function createGlobalStore(initial: PluginGlobalSettings = {}) {
   };
 }
 
-function setup(settings: TimerSettings, globalSettings: PluginGlobalSettings = {}) {
+function setup(
+  settings: TimerSettings,
+  globalSettings: PluginGlobalSettings = {},
+  { syncLoop = false }: { syncLoop?: boolean } = {}
+) {
   const fake = createFakeAction(settings);
   const service = createFakeService();
   const global = createGlobalStore(globalSettings);
   const notices: unknown[] = [];
-  const tracker = new TimeTracker(service.factory, global.store, async message => {
-    notices.push(message);
-  });
+  const tracker = new TimeTracker(
+    service.factory,
+    global.store,
+    async message => {
+      notices.push(message);
+    },
+    { syncLoop }
+  );
   trackers.push({ tracker, action: fake.action });
 
   const keyDown = () =>
@@ -719,3 +754,382 @@ test('a start that waits behind a slow list load records the moment of the press
     `started ${startedAt - pressedAt} ms late`
   );
 });
+
+// ---- Timers started or stopped outside the Stream Deck (#197) ----
+
+const MINUTE_MS = 60 * 1000;
+
+function remoteEntry(extra: Partial<MoneybirdTimeEntry> = {}): MoneybirdTimeEntry {
+  return {
+    id: 'remote-1',
+    user_id: '3',
+    project_id: '2',
+    contact_id: '',
+    description: 'Time registration',
+    billable: true,
+    started_at: new Date(Date.now() - 10 * MINUTE_MS).toISOString(),
+    ended_at: null,
+    paused_duration: 0,
+    created_at: '',
+    updated_at: '',
+    ...extra,
+  } as MoneybirdTimeEntry;
+}
+
+async function appear(tracker: TimeTracker, fake: ReturnType<typeof createFakeAction>) {
+  await tracker.onWillAppear({
+    action: fake.action,
+    payload: { settings: fake.current() },
+  } as unknown as WillAppearEvent<TimerSettings>);
+}
+
+/** A second key on the same tracker, also cleaned up after the test. */
+function addKey(tracker: TimeTracker, settings: TimerSettings) {
+  const fake = createFakeAction(settings);
+  trackers.push({ tracker, action: fake.action });
+  return fake;
+}
+
+test('an idle key picks up a matching timer started elsewhere', async () => {
+  const { fake, service, tracker } = setup({ ...configured });
+  const entry = remoteEntry();
+  service.state.recentEntries = [entry];
+  await appear(tracker, fake);
+
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.current().isRunning, true);
+  assert.equal(fake.current().timeEntryId, 'remote-1');
+  assert.equal(fake.current().startTime, entry.started_at);
+  assert.equal(fake.current().timerAdministrationId, '1');
+  assert.match(fake.titles.at(-1) ?? '', /⏱️ 10m/);
+});
+
+test('pressing a key that picked up a timer stops that entry instead of starting one', async () => {
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  service.state.recentEntries = [remoteEntry()];
+  await appear(tracker, fake);
+  await tracker.syncWithMoneybird();
+
+  await keyDown();
+
+  assert.equal(service.state.startCount, 0);
+  assert.equal(service.stopCalls.length, 1);
+  assert.equal(service.stopCalls[0]?.timeEntryId, 'remote-1');
+  assert.equal(fake.current().isRunning, false);
+});
+
+test('a running key whose entry was stopped elsewhere goes idle without stopping it again', async () => {
+  const start = new Date(Date.now() - 30 * MINUTE_MS);
+  const { fake, service, tracker } = setup(runningSince(start, { timerAdministrationId: '1' }));
+  service.state.recentEntries = [
+    remoteEntry({
+      id: 'entry-1',
+      ended_at: new Date().toISOString(),
+      started_at: start.toISOString(),
+    }),
+  ];
+  await appear(tracker, fake);
+
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.current().isRunning, false);
+  assert.equal('timeEntryId' in fake.current(), false);
+  assert.equal(service.stopCalls.length, 0);
+});
+
+test('a stop press does not overwrite an end time set elsewhere', async () => {
+  const start = new Date(Date.now() - 30 * MINUTE_MS);
+  const { fake, service, keyDown } = setup(runningSince(start, { timerAdministrationId: '1' }));
+  service.state.timeEntry = { ended_at: new Date(Date.now() - 5 * MINUTE_MS).toISOString() };
+
+  await keyDown();
+
+  assert.deepEqual(service.entryFetches, ['entry-1']);
+  assert.equal(service.stopCalls.length, 0);
+  assert.equal(fake.current().isRunning, false);
+});
+
+test('a failed lookup for one user does not stop the lookup for another', async () => {
+  const { fake, service, tracker } = setup({ ...configured });
+  const other = addKey(tracker, { ...configured, userId: '8' });
+  service.state.lookupErrorForUser = '3';
+  service.state.recentEntries = [remoteEntry({ user_id: '8' })];
+  await appear(tracker, fake);
+  await appear(tracker, other);
+
+  await tracker.syncWithMoneybird();
+
+  assert.equal(service.lookups.length, 2);
+  assert.equal(other.current().isRunning, true);
+  assert.equal(fake.current().isRunning, undefined);
+});
+
+test('a failed lookup leaves the keys as they are and shows no error', async () => {
+  const start = new Date(Date.now() - 30 * MINUTE_MS);
+  const { fake, service, tracker } = setup(runningSince(start, { timerAdministrationId: '1' }));
+  service.state.lookupError = new MoneybirdApiError('Server error: 503', 503);
+  await appear(tracker, fake);
+  const before = fake.savedSettings.length;
+
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.savedSettings.length, before);
+  assert.equal(fake.current().isRunning, true);
+  assert.ok(!fake.titles.includes('Error'));
+});
+
+test('keys of one administration and user share one lookup', async () => {
+  const { fake, service, tracker } = setup({ ...configured });
+  const other = addKey(tracker, { ...configured, projectId: '5' });
+  await appear(tracker, fake);
+  await appear(tracker, other);
+
+  await tracker.syncWithMoneybird();
+
+  assert.equal(service.lookups.length, 1);
+  assert.deepEqual(service.lookups[0], { apiKey: 'key', administrationId: '1', userId: '3' });
+});
+
+test('of two keys matching the same entry, the one with the same description picks it up', async () => {
+  const { fake, service, tracker } = setup({ ...configured, description: 'Review' });
+  const other = addKey(tracker, { ...configured, description: 'Meeting' });
+  service.state.recentEntries = [remoteEntry({ description: 'Meeting' })];
+  await appear(tracker, fake);
+  await appear(tracker, other);
+
+  await tracker.syncWithMoneybird();
+
+  assert.equal(other.current().isRunning, true);
+  assert.equal(other.current().timeEntryId, 'remote-1');
+  assert.equal(fake.current().isRunning, undefined);
+});
+
+test('when two keys match an entry and neither description decides, neither picks it up', async () => {
+  const { fake, service, tracker } = setup({ ...configured, description: 'Review' });
+  const other = addKey(tracker, { ...configured, description: 'Meeting' });
+  service.state.recentEntries = [remoteEntry({ description: 'Something else' })];
+  await appear(tracker, fake);
+  await appear(tracker, other);
+
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.current().isRunning, undefined);
+  assert.equal(other.current().isRunning, undefined);
+});
+
+test('an entry already shown by another key is not picked up again', async () => {
+  const start = new Date(Date.now() - 10 * MINUTE_MS);
+  const { fake, service, tracker } = setup(
+    runningSince(start, { timeEntryId: 'remote-1', timerAdministrationId: '1' })
+  );
+  const idle = addKey(tracker, { ...configured });
+  service.state.recentEntries = [remoteEntry({ started_at: start.toISOString() })];
+  await appear(tracker, fake);
+  await appear(tracker, idle);
+
+  await tracker.syncWithMoneybird();
+
+  assert.equal(idle.current().isRunning, undefined);
+  assert.equal(fake.current().timeEntryId, 'remote-1');
+});
+
+test('a running entry that started more than 24 hours ago is not picked up', async () => {
+  const { fake, service, tracker } = setup({ ...configured });
+  service.state.recentEntries = [
+    remoteEntry({ started_at: new Date(Date.now() - 27 * 24 * 60 * MINUTE_MS).toISOString() }),
+  ];
+  await appear(tracker, fake);
+
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.current().isRunning, undefined);
+});
+
+test('a key with another project or user does not pick up the entry', async () => {
+  const { fake, service, tracker } = setup({ ...configured, projectId: '5' });
+  service.state.recentEntries = [
+    remoteEntry(),
+    remoteEntry({ id: 'remote-2', user_id: '8', project_id: '5' }),
+  ];
+  await appear(tracker, fake);
+
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.current().isRunning, undefined);
+});
+
+test('auto-stop applies to a picked-up timer, counted from its own start', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const startedAt = new Date(Date.now() - 5 * HOUR_MS);
+  const { fake, service, tracker } = setup({
+    ...configured,
+    autoStopEnabled: true,
+    autoStopHours: 4,
+  });
+  service.state.recentEntries = [remoteEntry({ started_at: startedAt.toISOString() })];
+  await appear(tracker, fake);
+
+  await tracker.syncWithMoneybird();
+  mock.timers.tick(1_000);
+  await flushPromises();
+
+  assert.equal(service.stopCalls.length, 1);
+  assert.equal(service.stopCalls[0]?.timeEntryId, 'remote-1');
+  assert.equal(service.stopCalls[0]?.endedAt.getTime(), startedAt.getTime() + 4 * HOUR_MS);
+});
+
+test('keys look up Moneybird shortly after they appear and then every minute', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const { fake, service, tracker } = setup({ ...configured }, {}, { syncLoop: true });
+  await appear(tracker, fake);
+  assert.equal(service.lookups.length, 0);
+
+  mock.timers.tick(1_000);
+  await flushPromises();
+  assert.equal(service.lookups.length, 1);
+
+  mock.timers.tick(60_000);
+  await flushPromises();
+  assert.equal(service.lookups.length, 2);
+
+  await tracker.onWillDisappear({
+    action: fake.action,
+  } as unknown as WillDisappearEvent<TimerSettings>);
+  mock.timers.tick(60_000);
+  await flushPromises();
+  assert.equal(service.lookups.length, 2);
+});
+
+test('auto-stop does not overwrite an end time set elsewhere', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const start = new Date(Date.now() - 5 * HOUR_MS);
+  const { fake, service, tracker } = setup(
+    runningSince(start, { timerAdministrationId: '1', autoStopEnabled: true, autoStopHours: 4 })
+  );
+  // Stopped on the phone after one hour, while this computer was off.
+  service.state.timeEntry = { ended_at: new Date(start.getTime() + HOUR_MS).toISOString() };
+
+  await appear(tracker, fake);
+  mock.timers.tick(1_000);
+  await flushPromises();
+
+  assert.deepEqual(service.entryFetches, ['entry-1']);
+  assert.equal(service.stopCalls.length, 0);
+  assert.equal(fake.current().isRunning, false);
+});
+
+test('a running key whose entry started before the lookup period is checked on its own', async () => {
+  const start = new Date(Date.now() - 3 * 24 * HOUR_MS);
+  const { fake, service, tracker } = setup(runningSince(start, { timerAdministrationId: '1' }));
+  service.state.recentEntries = [];
+  service.state.timeEntry = { ended_at: new Date(Date.now() - HOUR_MS).toISOString() };
+  await appear(tracker, fake);
+
+  await tracker.syncWithMoneybird();
+
+  assert.deepEqual(service.entryFetches, ['entry-1']);
+  assert.equal(fake.current().isRunning, false);
+  assert.equal(service.stopCalls.length, 0);
+});
+
+test('a stop still goes out when the entry cannot be read first', async () => {
+  const start = new Date(Date.now() - 30 * MINUTE_MS);
+  const { fake, service, keyDown } = setup(runningSince(start, { timerAdministrationId: '1' }));
+  service.state.timeEntryError = new MoneybirdApiError('Server error: 503', 503);
+
+  await keyDown();
+
+  assert.equal(service.stopCalls.length, 1);
+  assert.equal(fake.current().isRunning, false);
+});
+
+test(
+  'a key with a request in flight is skipped, and does not hold up the lookup',
+  { timeout: 2000 },
+  async () => {
+    const { fake, service, tracker, keyDown } = setup({ ...configured });
+    let finishStart: (entry: MoneybirdTimeEntry) => void = () => {};
+    service.state.startTimer = () =>
+      new Promise(resolve => {
+        finishStart = resolve;
+      });
+    service.state.recentEntries = [remoteEntry()];
+    await appear(tracker, fake);
+
+    const press = keyDown();
+    await flushPromises();
+    // The start request hangs; the lookup must still finish.
+    await tracker.syncWithMoneybird();
+
+    assert.equal(fake.current().timeEntryId, undefined);
+    finishStart({ id: 'entry-1' } as MoneybirdTimeEntry);
+    await press;
+    assert.equal(fake.current().timeEntryId, 'entry-1');
+  }
+);
+
+test('a key that appears during a lookup gets its own lookup right after', async () => {
+  const { fake, service, tracker } = setup({ ...configured, projectId: '5' });
+  const late = addKey(tracker, { ...configured });
+  service.state.recentEntries = [remoteEntry()];
+  await appear(tracker, fake);
+
+  let appearLate: () => Promise<void> = async () => {};
+  service.state.beforeLookup = async () => {
+    service.state.beforeLookup = undefined;
+    await appearLate();
+  };
+  appearLate = async () => {
+    await appear(tracker, late);
+    // Its own one-second lookup would be folded into the run in progress.
+    void tracker.syncWithMoneybird();
+  };
+
+  await tracker.syncWithMoneybird();
+  await flushPromises();
+
+  assert.equal(late.current().isRunning, true);
+  assert.equal(service.lookups.length, 2);
+});
+
+test('a key whose administration changed during the lookup does not pick up the entry', async () => {
+  const { fake, service, tracker } = setup({ ...configured });
+  service.state.recentEntries = [remoteEntry()];
+  service.state.beforeLookup = async () => {
+    // The property inspector saves another administration while Moneybird answers.
+    await fake.action.setSettings({ ...fake.current(), administrationId: '9' });
+  };
+  await appear(tracker, fake);
+
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.current().isRunning, undefined);
+});
+
+test(
+  'a key whose start is in flight still decides the description tie-break',
+  { timeout: 2000 },
+  async () => {
+    const { fake, service, tracker, keyDown } = setup({ ...configured, description: 'Review' });
+    const other = addKey(tracker, { ...configured, description: 'Meeting' });
+    let finishStart: (entry: MoneybirdTimeEntry) => void = () => {};
+    service.state.startTimer = () =>
+      new Promise(resolve => {
+        finishStart = resolve;
+      });
+    // Moneybird already created the entry of the start that is still in flight.
+    service.state.recentEntries = [remoteEntry({ id: 'entry-1', description: 'Review' })];
+    await appear(tracker, fake);
+    await appear(tracker, other);
+
+    const press = keyDown();
+    await flushPromises();
+    await tracker.syncWithMoneybird();
+
+    assert.equal(other.current().isRunning, undefined);
+    finishStart({ id: 'entry-1' } as MoneybirdTimeEntry);
+    await press;
+    assert.equal(fake.current().timeEntryId, 'entry-1');
+  }
+);

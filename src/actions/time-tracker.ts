@@ -16,6 +16,7 @@ import {
   userToJson,
   contactToJson,
   type JsonValue,
+  type MoneybirdTimeEntry,
 } from '../types/moneybird.js';
 import path from 'path';
 import {
@@ -48,6 +49,7 @@ import {
   type SettingsPatch,
 } from '../utils/settings-writes.js';
 import { timerAdministrationOf } from '../utils/running-timer.js';
+import { PICK_UP_WINDOW_MS, decideRemoteTimers } from '../utils/remote-timers.js';
 import type { GlobalSettingsStore } from '../utils/global-settings.js';
 import { notifyPropertyInspector, pluginGlobalSettings } from '../utils/plugin-global-settings.js';
 
@@ -55,7 +57,14 @@ type TimerKeyAction = KeyAction<TimerSettings>;
 
 type TimerService = Pick<
   MoneybirdService,
-  'getAdministrations' | 'getProjects' | 'getUsers' | 'getContacts' | 'startTimer' | 'stopTimer'
+  | 'getAdministrations'
+  | 'getProjects'
+  | 'getUsers'
+  | 'getContacts'
+  | 'startTimer'
+  | 'stopTimer'
+  | 'getRecentTimeEntries'
+  | 'getTimeEntry'
 >;
 
 export type CreateTimerService = (apiKey: string, administrationId?: string) => TimerService;
@@ -71,6 +80,10 @@ const AUTO_STOP_NOTICE_MS = 3000;
 const AUTO_STOP_WARNING_MINUTES = 5;
 /** Lower bound for the auto-stop delay of a timer whose limit already passed. */
 const MIN_AUTO_STOP_DELAY_MS = 1000;
+/** How often visible keys compare their state with Moneybird (#197). */
+const SYNC_INTERVAL_MS = 60 * 1000;
+/** Delay after a key appears, so keys appearing together share one lookup. */
+const SYNC_AFTER_APPEAR_MS = 1000;
 
 /** The lists in the timer's property inspector that depend on the administration. */
 const TIMER_LISTS: DependentList[] = [
@@ -111,11 +124,18 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
   private autoStopTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private displayResetTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private requestsInFlight: Set<string> = new Set();
+  /** Visible keys, for the lookup of timers started or stopped elsewhere. */
+  private visibleKeys: Map<string, TimerKeyAction> = new Map();
+  private syncInterval: NodeJS.Timeout | undefined;
+  private syncSoonTimeout: NodeJS.Timeout | undefined;
+  private syncRun: Promise<void> | undefined;
+  private syncAgain = false;
 
   constructor(
     private readonly createService: CreateTimerService = createMoneybirdService,
     private readonly globalSettings: GlobalSettingsStore = pluginGlobalSettings,
-    private readonly notify: (message: JsonValue) => Promise<void> = notifyPropertyInspector
+    private readonly notify: (message: JsonValue) => Promise<void> = notifyPropertyInspector,
+    private readonly options: { syncLoop?: boolean } = {}
   ) {
     super();
   }
@@ -300,10 +320,220 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     } else {
       await this.showIdle(ev.action, settings);
     }
+
+    this.visibleKeys.set(ev.action.id, ev.action);
+    this.startSyncLoop();
   }
 
   override async onWillDisappear(ev: WillDisappearEvent<TimerSettings>): Promise<void> {
     this.clearInstanceRuntime(ev.action.id);
+    this.visibleKeys.delete(ev.action.id);
+    if (this.visibleKeys.size === 0) {
+      this.stopSyncLoop();
+    }
+  }
+
+  /** Looks up Moneybird soon (keys appearing together share it) and then every minute. */
+  private startSyncLoop(): void {
+    if (this.options.syncLoop === false) {
+      return;
+    }
+    clearTimeout(this.syncSoonTimeout);
+    this.syncSoonTimeout = setTimeout(() => {
+      this.syncSoonTimeout = undefined;
+      void this.syncWithMoneybird();
+    }, SYNC_AFTER_APPEAR_MS);
+    if (!this.syncInterval) {
+      this.syncInterval = setInterval(() => void this.syncWithMoneybird(), SYNC_INTERVAL_MS);
+    }
+  }
+
+  private stopSyncLoop(): void {
+    clearTimeout(this.syncSoonTimeout);
+    clearInterval(this.syncInterval);
+    this.syncSoonTimeout = undefined;
+    this.syncInterval = undefined;
+  }
+
+  /**
+   * Brings the visible keys in line with Moneybird: a key picks up a matching timer that
+   * was started elsewhere (the web app, another machine), and a key whose timer was
+   * stopped elsewhere goes idle. One lookup per administration and user, whatever the
+   * number of keys. A failed lookup changes nothing and shows nothing; the next one
+   * tries again. Runs never overlap.
+   */
+  syncWithMoneybird(): Promise<void> {
+    if (this.syncRun) {
+      // A key that appeared after the run took its snapshot gets one more run right after.
+      this.syncAgain = true;
+      return this.syncRun;
+    }
+    this.syncRun = (async () => {
+      do {
+        this.syncAgain = false;
+        await this.runSync().catch(error =>
+          logError(streamDeck.logger, 'Error syncing timers with Moneybird', error)
+        );
+      } while (this.syncAgain && this.visibleKeys.size > 0);
+    })().finally(() => {
+      this.syncRun = undefined;
+    });
+    return this.syncRun;
+  }
+
+  private async runSync(): Promise<void> {
+    const now = new Date();
+    const keys = await Promise.all(
+      Array.from(this.visibleKeys.values()).map(async action => ({
+        action,
+        settings: await action.getSettings(),
+      }))
+    );
+    const shownEntryIds = new Set(
+      keys.flatMap(key =>
+        key.settings.isRunning && key.settings.timeEntryId ? [key.settings.timeEntryId] : []
+      )
+    );
+
+    type Group = {
+      apiKey: string;
+      administrationId: string;
+      userId: string;
+      members: typeof keys;
+    };
+    const groups = new Map<string, Group>();
+    for (const key of keys) {
+      const apiKey = await this.resolveApiKey(key.settings);
+      const administrationId = key.settings.isRunning
+        ? timerAdministrationOf(key.settings)
+        : key.settings.administrationId;
+      const userId = key.settings.userId;
+      if (!apiKey || !administrationId || !userId) {
+        continue;
+      }
+      const groupKey = JSON.stringify([apiKey, administrationId, userId]);
+      const group = groups.get(groupKey) ?? { apiKey, administrationId, userId, members: [] };
+      group.members.push(key);
+      groups.set(groupKey, group);
+    }
+
+    for (const group of groups.values()) {
+      let entries;
+      try {
+        entries = await this.createService(
+          group.apiKey,
+          group.administrationId
+        ).getRecentTimeEntries(group.userId, new Date(now.getTime() - PICK_UP_WINDOW_MS), now);
+      } catch (error) {
+        logError(streamDeck.logger, 'Could not look up timers in Moneybird', error, {
+          administrationId: group.administrationId,
+        });
+        continue;
+      }
+
+      const members = group.members;
+      const service = this.createService(group.apiKey, group.administrationId);
+      const knownIds = new Set(entries.map(entry => entry.id));
+      // A running entry that started before the lookup period is not in the list: read it
+      // on its own, so a stop elsewhere is still noticed.
+      const olderEntries = await Promise.all(
+        members
+          .filter(
+            member =>
+              member.settings.isRunning === true &&
+              member.settings.timeEntryId &&
+              !knownIds.has(member.settings.timeEntryId)
+          )
+          .map(member =>
+            service.getTimeEntry(member.settings.timeEntryId as string).catch(error => {
+              logError(streamDeck.logger, 'Could not check a running timer', error, {
+                timeEntryId: member.settings.timeEntryId,
+              });
+              return undefined;
+            })
+          )
+      );
+
+      const decision = decideRemoteTimers(
+        members.map(member => ({ id: member.action.id, settings: member.settings })),
+        [...entries, ...olderEntries.filter(entry => entry !== undefined)],
+        now,
+        shownEntryIds
+      );
+      // Every key takes part in the decision (a key mid-start still wins its own entry by
+      // description), but a key with a press in flight is left to that press: its request
+      // (a start has no timeout) must not hold up the sync for every other key. Checked
+      // here, after the last await, so a press that started meanwhile is seen too.
+      const actions = new Map(
+        members
+          .filter(member => !this.requestsInFlight.has(member.action.id))
+          .map(member => [member.action.id, member.action])
+      );
+
+      const tasks = [
+        ...decision.endedElsewhere.map(({ keyId, entry }) => {
+          const action = actions.get(keyId);
+          return action ? this.releaseStoppedElsewhere(action, entry.id) : undefined;
+        }),
+        ...decision.pickUp.map(({ keyId, entry }) => {
+          const action = actions.get(keyId);
+          return action ? this.pickUpRemoteTimer(action, entry, group.administrationId) : undefined;
+        }),
+      ];
+      // Different keys do not wait for each other's queue.
+      await Promise.all(
+        tasks.map(task =>
+          task?.catch(error => logError(streamDeck.logger, 'Error applying a timer sync', error))
+        )
+      );
+    }
+  }
+
+  /** The key's own entry already has an end time in Moneybird: go idle, without a stop. */
+  private releaseStoppedElsewhere(action: TimerKeyAction, entryId: string): Promise<void> {
+    return runInOrder(action.id, async () => {
+      const latest = await action.getSettings();
+      if (!latest.isRunning || latest.timeEntryId !== entryId) {
+        return;
+      }
+      streamDeck.logger.info(`Timer ${entryId} of ${action.id} was stopped outside the key`);
+      await this.resetToIdle(action, latest);
+    });
+  }
+
+  /** Shows a timer started elsewhere on an idle key, so a press stops it. */
+  private pickUpRemoteTimer(
+    action: TimerKeyAction,
+    entry: MoneybirdTimeEntry,
+    administrationId: string
+  ): Promise<void> {
+    return runInOrder(action.id, async () => {
+      // A press waiting for its turn decides what the key does; so does a key now gone.
+      if (!this.visibleKeys.has(action.id) || this.requestsInFlight.has(action.id)) {
+        return;
+      }
+      const latest = await action.getSettings();
+      if (
+        latest.isRunning ||
+        latest.administrationId !== administrationId ||
+        latest.userId !== entry.user_id ||
+        latest.projectId !== entry.project_id
+      ) {
+        return;
+      }
+      // An error flash from an earlier press would otherwise redraw the key as idle.
+      clearTimeoutForKey(this.displayResetTimeouts, action.id);
+
+      const timerState = {
+        isRunning: true,
+        startTime: new Date(entry.started_at).toISOString(),
+        timeEntryId: entry.id,
+        timerAdministrationId: administrationId,
+      };
+      await writePatch(action, { values: timerState });
+      streamDeck.logger.info(`Key ${action.id} picked up timer ${entry.id} started elsewhere`);
+      await this.showRunning(action, { ...latest, ...timerState });
+    });
   }
 
   override async onKeyDown(ev: KeyDownEvent<TimerSettings>): Promise<void> {
@@ -405,6 +635,13 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       return;
     }
 
+    if (await this.isStoppedElsewhere(moneybirdService, settings.timeEntryId)) {
+      // Stopped in the web app or elsewhere: keep that end time instead of overwriting it.
+      streamDeck.logger.info(`Timer ${settings.timeEntryId} was already stopped elsewhere`);
+      await this.resetToIdle(action, settings);
+      return;
+    }
+
     try {
       await moneybirdService.stopTimer(
         settings.timeEntryId,
@@ -431,6 +668,24 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
       await this.flashError(action, () =>
         this.showRunning(action, settings, { scheduleAutoStop: false })
       );
+    }
+  }
+
+  /**
+   * True when Moneybird already has an end time for the entry. When that cannot be read,
+   * the stop request itself goes ahead and reports its own errors.
+   */
+  private async isStoppedElsewhere(
+    moneybirdService: TimerService,
+    timeEntryId: string
+  ): Promise<boolean> {
+    try {
+      return Boolean((await moneybirdService.getTimeEntry(timeEntryId)).ended_at);
+    } catch (error) {
+      logError(streamDeck.logger, 'Could not check the time entry before stopping', error, {
+        timeEntryId,
+      });
+      return false;
     }
   }
 
@@ -563,12 +818,24 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
     const endedAt = resolveAutoStopEndTime(settings.startTime, autoStopHours);
 
+    const apiKey = await this.resolveApiKey(settings);
+    const moneybirdService = apiKey
+      ? this.createService(apiKey, timerAdministrationOf(settings))
+      : undefined;
+    if (
+      moneybirdService &&
+      (await this.isStoppedElsewhere(moneybirdService, settings.timeEntryId))
+    ) {
+      // Stopped elsewhere while the key could not see it (asleep, offline): keep that end.
+      streamDeck.logger.info(`Timer ${settings.timeEntryId} was already stopped elsewhere`);
+      await this.resetToIdle(action, settings);
+      return;
+    }
+
     try {
-      const apiKey = await this.resolveApiKey(settings);
-      if (!apiKey) {
+      if (!moneybirdService) {
         throw new Error('No Moneybird API key configured');
       }
-      const moneybirdService = this.createService(apiKey, timerAdministrationOf(settings));
       await moneybirdService.stopTimer(settings.timeEntryId, endedAt);
     } catch (error) {
       logError(streamDeck.logger, 'Error during auto-stop', error, {
