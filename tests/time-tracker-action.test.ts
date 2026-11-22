@@ -990,7 +990,34 @@ test('a picked-up timer is not auto-stopped, even past the key limit', async () 
   assert.equal(service.stopCalls.length, 0);
   assert.equal(fake.current().isRunning, true);
   assert.equal(fake.current().timerPickedUp, true);
-  assert.ok(!(fake.titles.at(-1) ?? '').startsWith('⚠️'));
+});
+
+test('a picked-up timer shows no auto-stop warning near the key limit', async () => {
+  // Three minutes before a 4 h limit: a timer started on the key would show the warning.
+  const startedAt = new Date(Date.now() - 4 * HOUR_MS + 3 * 60_000);
+  const { fake, service, tracker } = setup({
+    ...configured,
+    autoStopEnabled: true,
+    autoStopHours: 4,
+  });
+  service.state.recentEntries = [remoteEntry({ started_at: startedAt.toISOString() })];
+  await appear(tracker, fake);
+
+  await tracker.syncWithMoneybird();
+
+  assert.equal(fake.current().isRunning, true);
+  const title = fake.titles.at(-1) ?? '';
+  assert.match(title, /⏱️/);
+  assert.ok(!title.startsWith('⚠️'), title);
+});
+
+test('starting a timer on the key removes a leftover picked-up mark', async () => {
+  const { fake, keyDown } = setup({ ...configured, timerPickedUp: true });
+
+  await keyDown();
+
+  assert.equal(fake.current().isRunning, true);
+  assert.equal('timerPickedUp' in fake.current(), false);
 });
 
 test('a picked-up timer stopped by hand ends at the press, not at the key limit', async () => {

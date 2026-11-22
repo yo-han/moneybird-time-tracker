@@ -651,8 +651,10 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
 
       // Only the timer fields are written, onto the settings as they are now: anything
       // saved while the start request was in flight is kept.
-      await writePatch(action, { values: timerState });
-      await this.showRunning(action, { ...settings, ...timerState });
+      // A started timer is the key's own: a leftover picked-up mark must not switch off
+      // its auto-stop.
+      await writePatch(action, { values: timerState, remove: ['timerPickedUp'] });
+      await this.showRunning(action, { ...settings, ...timerState, timerPickedUp: undefined });
       streamDeck.logger.debug(`Timer started for instance ${instanceId}`);
     } catch (error: unknown) {
       logError(streamDeck.logger, 'Error saving the started timer', error, {
