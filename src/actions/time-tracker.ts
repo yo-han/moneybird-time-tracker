@@ -728,12 +728,37 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
         instanceId,
         timeEntryId: timeEntry.id,
       });
-      // The entry exists in Moneybird. If saving it failed, the key does not hold it:
+      const latest = await this.readSettingsAfterFailure(action);
+      // The id check guards against settings written outside the key's queue (the property
+      // inspector saves its own copy); every writer inside the queue waits for this press.
+      if (latest?.isRunning && latest.timeEntryId === timeEntry.id) {
+        // Only the display failed: the key holds the entry, and the sync never picks up an
+        // entry for a running key, so nothing else would schedule its auto-stop. Schedule
+        // it now, apart from the redraw, which may fail again; the redraw after the error
+        // flash restarts the refresh and replaces this auto-stop with the same one.
+        this.scheduleAutoStop(action, latest);
+        await this.flashError(action, () => this.showRunning(action, latest));
+        return;
+      }
+      // The entry exists in Moneybird, but saving it failed, so the key does not hold it:
       // remember it like a start without an answer, so the next sync picks it up as this
-      // key's own and keeps its auto-stop. (If only the display failed, the key already
-      // holds the entry and the sync leaves it alone.)
+      // key's own and keeps its auto-stop.
       this.rememberUnconfirmedStart(instanceId, settings, startedAt);
       await this.flashError(action, () => this.showIdle(action, settings));
+    }
+  }
+
+  /** The key's settings, or undefined (logged) when they cannot be read either. */
+  private async readSettingsAfterFailure(
+    action: TimerKeyAction
+  ): Promise<TimerSettings | undefined> {
+    try {
+      return await action.getSettings();
+    } catch (error: unknown) {
+      logError(streamDeck.logger, 'Error reading settings after a failed start', error, {
+        instanceId: action.id,
+      });
+      return undefined;
     }
   }
 
