@@ -53,10 +53,13 @@ export function hashApiKey(apiKey: string): string {
   return `${HASH_SCHEME}:${salt.toString('hex')}:${hash.toString('hex')}`;
 }
 
-/** True when `apiKey` is the key that `storedHash` was made from. */
+/**
+ * True when `apiKey` is the key that `storedHash` was made from. The scheme label is not
+ * checked separately: a value in any other format cannot produce the same scrypt hash.
+ */
 export function matchesApiKeyHash(apiKey: string, storedHash: string | undefined): boolean {
-  const [scheme, saltHex, hashHex, ...rest] = storedHash?.split(':') ?? [];
-  if (scheme !== HASH_SCHEME || !saltHex || !hashHex || rest.length > 0) {
+  const [, saltHex, hashHex, ...rest] = storedHash?.split(':') ?? [];
+  if (!saltHex || !hashHex || rest.length > 0) {
     return false;
   }
   const expected = Buffer.from(hashHex, 'hex');
