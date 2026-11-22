@@ -14,6 +14,9 @@ function resolveBillable(settings: TimerSettings): boolean {
   return settings.billable;
 }
 
+/** Description of an entry started without one; also how a key without one is matched. */
+export const DEFAULT_TIME_ENTRY_DESCRIPTION = 'Time registration';
+
 export function buildStartTimerPayload(
   settings: TimerSettings,
   now: Date
@@ -33,7 +36,7 @@ export function buildStartTimerPayload(
       user_id: settings.userId,
       project_id: settings.projectId,
       contact_id: settings.contactId || null,
-      description: settings.description || 'Time registration',
+      description: settings.description || DEFAULT_TIME_ENTRY_DESCRIPTION,
       billable: resolveBillable(settings),
     },
   };
