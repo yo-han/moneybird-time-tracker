@@ -26,7 +26,7 @@ The plugin includes three actions:
 
 ## Requirements
 
-- Elgato Stream Deck
+- Elgato Stream Deck, software version 7.1 or later
 - Moneybird account with API access
 - Moneybird personal API token
 - Node.js `24.x` for local development

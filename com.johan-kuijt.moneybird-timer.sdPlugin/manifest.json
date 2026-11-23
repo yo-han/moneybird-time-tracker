@@ -1,6 +1,6 @@
 {
 	"Name": "Moneybird Timer",
-	"Version": "0.6.0.0",
+	"Version": "0.6.1.0",
 	"Author": "Johan Kuijt",
 	"Actions": [
 		{
@@ -63,7 +63,7 @@
 	"Icon": "imgs/plugin/marketplace",
 	"SDKVersion": 2,
 	"Software": {
-		"MinimumVersion": "6.4"
+		"MinimumVersion": "7.1"
 	},
 	"OS": [
 		{
