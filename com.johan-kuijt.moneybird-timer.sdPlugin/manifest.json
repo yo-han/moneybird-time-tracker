@@ -63,7 +63,7 @@
 	"Icon": "imgs/plugin/marketplace",
 	"SDKVersion": 2,
 	"Software": {
-		"MinimumVersion": "6.4"
+		"MinimumVersion": "7.1"
 	},
 	"OS": [
 		{
