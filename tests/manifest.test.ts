@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
 
 const MANIFEST_PATH = 'com.johan-kuijt.moneybird-timer.sdPlugin/manifest.json';
 const SDK_DIST = 'node_modules/@elgato/streamdeck/dist/plugin';
@@ -69,4 +70,41 @@ test('the manifest minimum Stream Deck version covers every version the SDK requ
     [],
     `Software.MinimumVersion ${manifest.Software.MinimumVersion} is below what the SDK requires`
   );
+});
+
+type Manifest = { Nodejs: { Version: string; Debug?: string } } & Record<string, unknown>;
+
+function readManifest(): Manifest {
+  return JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as Manifest;
+}
+
+test('the plugin runs on the Node major the project builds and tests with', () => {
+  const engines = (
+    JSON.parse(readFileSync('package.json', 'utf8')) as { engines: { node: string } }
+  ).engines.node;
+  const engineMajor = /^>=\s*(\d+)/.exec(engines)?.[1];
+  assert.ok(engineMajor, `package.json engines.node has no >= major: ${engines}`);
+
+  assert.equal(readManifest().Nodejs.Version, engineMajor);
+});
+
+test('the packaged manifest leaves the debugger out and is otherwise unchanged', async () => {
+  // A plain .js script outside the TypeScript build; loaded from the repo root at run time.
+  const scriptUrl = pathToFileURL(path.resolve('scripts/release-manifest.js')).href;
+  const { releaseManifestText } = (await import(scriptUrl)) as {
+    releaseManifestText: (text: string) => string;
+  };
+  const repoManifest = readManifest();
+  assert.equal(
+    repoManifest.Nodejs.Debug,
+    'enabled',
+    'the repo manifest should keep Debug for development'
+  );
+
+  const released = JSON.parse(releaseManifestText(readFileSync(MANIFEST_PATH, 'utf8'))) as Manifest;
+
+  // Leaving Debug out is the documented way to disable it.
+  assert.equal('Debug' in released.Nodejs, false);
+  const { Debug: _debug, ...repoNodejs } = repoManifest.Nodejs;
+  assert.deepEqual(released, { ...repoManifest, Nodejs: repoNodejs });
 });

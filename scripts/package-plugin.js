@@ -5,6 +5,7 @@ import { createReadStream, createWriteStream, promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { ZipArchive } from 'archiver';
+import { releaseManifestText } from './release-manifest.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -106,9 +107,14 @@ async function packagePlugin() {
 
     // Add all files from the plugin directory. archiver only skips entries when the
     // third argument is a function that returns false; entry.name is relative to pluginPath.
+    // manifest.json is added separately, with the debugger disabled for release.
     archive.directory(pluginPath, 'com.johan-kuijt.moneybird-timer.sdPlugin', entry =>
-      isExcludedFromPackage(entry.name) ? false : entry
+      isExcludedFromPackage(entry.name) || entry.name === 'manifest.json' ? false : entry
     );
+    const manifestText = await fs.readFile(path.join(pluginPath, 'manifest.json'), 'utf8');
+    archive.append(releaseManifestText(manifestText), {
+      name: 'com.johan-kuijt.moneybird-timer.sdPlugin/manifest.json',
+    });
 
     await archive.finalize();
 
