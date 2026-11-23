@@ -692,6 +692,26 @@ export class TimeTracker extends SingletonAction<TimerSettings> {
     }
 
     await this.holdStartedTimer(action, settings, timeEntry, startedAt);
+    this.syncIfAnotherKeyRuns(instanceId);
+  }
+
+  /**
+   * Moneybird keeps one running timer per user: creating an entry ends the one that ran,
+   * with the new start as its end. When another key shows a running timer, look it up now,
+   * so that key goes idle at once instead of at the next minute's sync. Runs in the
+   * background; the press does not wait for it.
+   */
+  private syncIfAnotherKeyRuns(instanceId: string): void {
+    const others = Array.from(this.visibleKeys.values()).filter(other => other.id !== instanceId);
+    void Promise.all(others.map(other => other.getSettings()))
+      .then(async settings => {
+        if (settings.some(other => other.isRunning === true)) {
+          await this.syncWithMoneybird();
+        }
+      })
+      .catch(error =>
+        logError(streamDeck.logger, 'Error syncing after a start', error, { instanceId })
+      );
   }
 
   /** Saves and shows a started entry as this key's running timer. */

@@ -1786,3 +1786,76 @@ test('a start whose display and settings read both failed ends idle, as before',
   assert.equal(fake.titles.at(-1), 'Start');
   assert.equal(fake.current().isRunning, true);
 });
+
+test('a start shows the timer it ended on another key as stopped at once', async () => {
+  // Moneybird keeps one running timer per user: creating entry-2 ends entry-A at its start.
+  const { fake, service, tracker, keyDown } = setup({ ...configured, projectId: '5' });
+  const other = addKey(
+    tracker,
+    runningSince(new Date(Date.now() - 30 * MINUTE_MS), {
+      timeEntryId: 'entry-A',
+      timerAdministrationId: '1',
+    })
+  );
+  await appear(tracker, fake);
+  await appear(tracker, other);
+  service.state.startTimer = async () => ({ id: 'entry-2' }) as MoneybirdTimeEntry;
+  service.state.recentEntries = [
+    remoteEntry({ id: 'entry-A', ended_at: new Date().toISOString() }),
+    remoteEntry({ id: 'entry-2', project_id: '5', started_at: new Date().toISOString() }),
+  ];
+
+  await keyDown();
+  await flushPromises();
+
+  assert.equal(fake.current().timeEntryId, 'entry-2');
+  assert.equal(other.current().isRunning, false);
+  assert.equal(service.stopCalls.length, 0);
+  assert.equal(service.lookups.length, 1);
+});
+
+test('a start with no other running key does not look up Moneybird', async () => {
+  const { fake, service, tracker, keyDown } = setup({ ...configured });
+  const idle = addKey(tracker, { ...configured, projectId: '5' });
+  await appear(tracker, fake);
+  await appear(tracker, idle);
+  service.state.startTimer = async () => ({ id: 'entry-2' }) as MoneybirdTimeEntry;
+
+  await keyDown();
+  await flushPromises();
+
+  assert.equal(fake.current().timeEntryId, 'entry-2');
+  assert.equal(service.lookups.length, 0);
+});
+
+test('a start whose save failed still shows the ended timer as stopped and takes its own entry back', async () => {
+  freezeClock();
+  const { fake, service, tracker, keyDown } = setup({ ...configured, projectId: '5' });
+  const other = addKey(
+    tracker,
+    runningSince(new Date(Date.now() - 30 * MINUTE_MS), {
+      timeEntryId: 'entry-A',
+      timerAdministrationId: '1',
+    })
+  );
+  await appear(tracker, fake);
+  await appear(tracker, other);
+  service.state.startTimer = async () => ({ id: 'entry-2' }) as MoneybirdTimeEntry;
+  const save = fake.action.setSettings;
+  fake.action.setSettings = async () => {
+    throw new Error('settings could not be saved');
+  };
+
+  service.state.recentEntries = [
+    remoteEntry({ id: 'entry-A', ended_at: new Date().toISOString() }),
+    remoteEntry({ id: 'entry-2', project_id: '5', started_at: pressMinute() }),
+  ];
+  await keyDown();
+  fake.action.setSettings = save;
+  await flushPromises();
+
+  assert.equal(other.current().isRunning, false);
+  assert.equal(fake.current().timeEntryId, 'entry-2');
+  assert.equal('timerPickedUp' in fake.current(), false);
+  assert.equal(service.stopCalls.length, 0);
+});
