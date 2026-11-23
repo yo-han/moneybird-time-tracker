@@ -45,6 +45,17 @@ test('the manifest minimum Stream Deck version covers every version the SDK requ
     }))
   );
   assert.ok(requirements.length > 0, `no requiresVersion calls found in ${SDK_DIST}`);
+  // Every call site must match the pattern, so none is skipped silently.
+  const callSites = javascriptFiles(SDK_DIST).reduce(
+    (count, file) =>
+      count + (readFileSync(file, 'utf8').match(/requiresVersion\(\s*\d/g) ?? []).length,
+    0
+  );
+  assert.equal(
+    requirements.length,
+    callSites,
+    'some requiresVersion calls do not match the pattern'
+  );
   assert.ok(
     requirements.some(requirement => requirement.feature.includes('onDidReceiveSettings')),
     'the settings behavior requirement was not found; the pattern no longer matches the SDK'
