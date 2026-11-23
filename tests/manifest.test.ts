@@ -82,25 +82,29 @@ test('the plugin runs on the Node major the project builds and tests with', () =
   const engines = (
     JSON.parse(readFileSync('package.json', 'utf8')) as { engines: { node: string } }
   ).engines.node;
-  const engineMajor = /^>=(\d+)\s/.exec(engines)?.[1];
+  const engineMajor = /^>=\s*(\d+)/.exec(engines)?.[1];
   assert.ok(engineMajor, `package.json engines.node has no >= major: ${engines}`);
 
   assert.equal(readManifest().Nodejs.Version, engineMajor);
 });
 
-test('the packaged manifest has the debugger disabled and is otherwise unchanged', async () => {
+test('the packaged manifest leaves the debugger out and is otherwise unchanged', async () => {
   // A plain .js script outside the TypeScript build; loaded from the repo root at run time.
   const scriptUrl = pathToFileURL(path.resolve('scripts/release-manifest.js')).href;
   const { releaseManifestText } = (await import(scriptUrl)) as {
     releaseManifestText: (text: string) => string;
   };
   const repoManifest = readManifest();
+  assert.equal(
+    repoManifest.Nodejs.Debug,
+    'enabled',
+    'the repo manifest should keep Debug for development'
+  );
 
   const released = JSON.parse(releaseManifestText(readFileSync(MANIFEST_PATH, 'utf8'))) as Manifest;
 
-  assert.equal(released.Nodejs.Debug, 'disabled');
-  assert.deepEqual(
-    { ...released, Nodejs: { ...released.Nodejs, Debug: repoManifest.Nodejs.Debug } },
-    repoManifest
-  );
+  // Leaving Debug out is the documented way to disable it.
+  assert.equal('Debug' in released.Nodejs, false);
+  const { Debug: _debug, ...repoNodejs } = repoManifest.Nodejs;
+  assert.deepEqual(released, { ...repoManifest, Nodejs: repoNodejs });
 });
